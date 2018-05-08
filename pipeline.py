@@ -339,6 +339,7 @@ if __name__ == '__main__':
     trimmomatic = config.get('Tools', 'trimmomatic') 
     bwa = config.get('Tools','bwa')
     samtools = config.get('Tools','samtools')
+    umitools = config.get('Tools','umitools')
     picard = config.get('Tools','picard-tools')
 #    qualimap = config.get('Tools','qualimap')
 
@@ -586,13 +587,13 @@ def bwa_map_and_sort(output_bam, ref_genome, fq1, fq2=None, read_group=None, thr
 	                         ref=ref_genome, fq1=fq1)
 
 	bwa_samse_args = "samse {rg} {ref} - {fq} \
-	            ".format(rg="-R '%s'" % read_group if read_group!=None else "", 
-                        ref=ref_genome, fq=fq)
+	            ".format(rg="-r '%s'" % read_group if read_group!=None else "", 
+                        ref=ref_genome, fq=fq1)
 
 # PE is rather not applicable to miRNAs - NOT TESTED!
 #
 #	bwa_sampe_args = "sampe {rg} {ref} - {fq1} {fq2} \
-#	            ".format(rg="-R '%s'" % read_group if read_group!=None else "", 
+#	            ".format(rg="-r '%s'" % read_group if read_group!=None else "", 
 #                        ref=ref_genome, fq1=fq1, fq2=fq2)
 
 	
@@ -635,8 +636,8 @@ def map_reads(fastq_list, ref_genome, output_bam, read_groups=None):
     
     merge_bams(output_bam, *tmp_bams)
     
-#    for f in tmp_bams:
-#        os.remove(f)
+    for f in tmp_bams:
+        os.remove(f)
 
 
 #@transform(trim_reads, formatter(), "{subpath[0][0]}/{subdir[0][0]}.bam")
@@ -650,6 +651,30 @@ def map_trimmed_reads(fastqs, bam_file, sample_id):
 			.format(rgid=sample_id+"_"+lane_id, lb=sample_id) for lane_id in ['L001', 'L002', 'L003', 'L004']]
     map_reads(fastqs, reference, bam_file, read_groups)
 
+
+#888888888888888888888888888888888888888888
+#
+#
+#   Postprocessing
+#
+#
+#88888888888888888888888888888888888888888888
+
+
+@transform(map_trimmed_reads, suffix('.bam'), '.bam.bai')
+def index_bam_task(bam, _):
+    """ Index initial bam """
+    index_bam(bam)
+
+
+@follows(index_bam_task)
+@transform(map_trimmed_reads, suffix('.bam'), '.dedup.bam', '\1.dedup.log')
+def dedup_by_umi(input_bam, output_bam, logfile):
+    """ Dedup reads with the same mapping start and UMI """
+    args = 'dedup -I {input_bam} -S {dedup_bam} -L {logfile}\
+	   '.format(input_bam=input_bam, dedup_bam=dedup_bam, logfile=logfile)
+
+    run_cmd(umitools, args, dockerize=dockerize, cpus=threads, mem_per_cpu=int(mem/threads))
 
 
 
