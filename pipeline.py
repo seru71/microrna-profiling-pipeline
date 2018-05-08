@@ -381,7 +381,7 @@ def run_cmd(cmd, args, dockerize, interpreter_args=None, run_locally=True,
     full_cmd = ("{docker} "+cmd).format(docker = docker if dockerize else "",
                                         args=args, 
                                         interpreter_args = interpreter_args if interpreter_args!=None else "")
-
+#    print full_cmd
     stdout, stderr = "", ""
     slurm_account = "default"
 
@@ -423,7 +423,7 @@ def run_piped_command(*args):
                   ".format(cpus=cpus, mem=int(1.2*mem_per_cpu), time=walltime)
 	
     full_cmd = expand_piped_command(*args)
-	
+    print full_cmd	
     try:
         stdout, stderr = run_job(full_cmd.strip(), 
                                  job_other_options=job_options,
@@ -462,7 +462,7 @@ def produce_fastqc_report(fastq_file, output_dir=None):
 #88888888888888888888888888888888888888888888888888888888888888888888888888888888888888888
 
 from ruffus import *
-
+from umi_trimmer import trim_umi
 
 #
 #
@@ -516,17 +516,29 @@ def link_fastqs(fastq_in, fastq_out):
 # SAMPLE_ID can contain all signs except path delimiter, i.e. "\"
 #
 @active_if(run_folder != None or input_fastqs != None)
-@transform(link_fastqs, regex(r'(.+)/([^/]+)_S[1-9]\d?_(L\d\d\d)_R1_001\.fastq\.gz$'),  r'\1/\2_\3.fq.gz')
-def trim_reads(input_fq, output_fq):
+@transform(link_fastqs, regex(r'(.+)/([^/]+)_S[1-9]\d?_(L\d\d\d)_R1_001\.fastq\.gz$'),  r'\1/\2_\3.fq.tmp.gz')
+def trim_reads1(input_fq, output_fq):
+
+    # trim adapters
     args = "SE -phred33 -threads 1 \
             {in_fq} {out_fq} \
-            MINLEN:36 \
-            ILLUMINACLIP:{adapter}:2:30:10 \
+            ILLUMINACLIP:{adapter}:2:30:8 \
             SLIDINGWINDOW:4:15".format(in_fq=input_fq, out_fq=output_fq, adapter=adapters)
+    # MINLEN:15
     max_mem = 2048
     run_cmd(trimmomatic, args, interpreter_args="-Xmx"+str(max_mem)+"m", 
             dockerize=dockerize, cpus=1, mem_per_cpu=max_mem)
 
+@transform(trim_reads1, suffix('.tmp.gz'),  '.gz')
+def trim_reads(input_fq, output_fq):
+
+    # trim UMIs
+    pre_umi_adapter="AACTGTAGGCACCATCAAT"
+    umi_stats = trim_umi(input_fq, output_fq, pre_umi_adapter)
+
+    umi_stats_file = output_fq+'.umistats'
+    with open(umi_stats_file, 'w') as statsf:
+	statsf.write(str(umi_stats))
 
 
 
@@ -608,34 +620,35 @@ def merge_bams(out_bam, *in_bams):
 	
 	
 def map_reads(fastq_list, ref_genome, output_bam, read_groups=None):
-    
+
     # If no read groups is provided, we could make up default ones based on fq filenames.
     if read_groups==None:
         s_ids = [ os.path.basename(s[0][:-len('_R1.fq.gz')] if isinstance(s, tuple) else s[:-len('fq.gz')]) for s in fastq_list ]
-        read_groups = [ '@RG\tID:{sid}\tSM:{sid}\tLB:{sid}'.format(sid=s) for s in s_ids]
+        read_groups = [ '@RG\\tID:{sid}\\tSM:{sid}\\tLB:{sid}'.format(sid=s) for s in s_ids]
     
     tmp_bams = [ output_bam+str(i) for i in range(0, len(fastq_list)) ]
     for i in range(0, len(fastq_list)):
 		if isinstance(fastq_list[i], tuple):
 			bwa_map_and_sort(tmp_bams[i], ref_genome, fastq_list[i][0], fastq_list[i][1], read_groups[i])
 		else:
-			bwa_map_and_sort(tmp_bams[i], ref_genome, fastq_list[i], read_groups[i])   
+			bwa_map_and_sort(tmp_bams[i], ref_genome, fastq_list[i], read_group=read_groups[i])   
     
     merge_bams(output_bam, *tmp_bams)
     
-    for f in tmp_bams:
-        os.remove(f)
+#    for f in tmp_bams:
+#        os.remove(f)
 
 
 #@transform(trim_reads, formatter(), "{subpath[0][0]}/{subdir[0][0]}.bam")
-@transform(trim_reads, 
+@collate(trim_reads, 
             formatter("(.+)/(?P<SAMPLE_ID>[^/]+)_L\d\d\d\.fq\.gz$"), 
             "{subpath[0][0]}/{subdir[0][0]}.bam",
             "{SAMPLE_ID[0]}")
-def map_trimmed_reads(fastq, bam_file, sample_id):
+def map_trimmed_reads(fastqs, bam_file, sample_id):
     """ Maps trimmed paired and unpaired reads. """
-    read_groups = ['@RG\tID:{rgid}\tSM:{rgid}\tLB:{lb}'.format(rgid=sample_id, lb=sample_id)]
-    map_reads([fastq], reference, bam_file, read_groups)
+    read_groups = ['@RG\\tID:{rgid}\\tSM:{lb}\\tLB:{lb}'\
+			.format(rgid=sample_id+"_"+lane_id, lb=sample_id) for lane_id in ['L001', 'L002', 'L003', 'L004']]
+    map_reads(fastqs, reference, bam_file, read_groups)
 
 
 
