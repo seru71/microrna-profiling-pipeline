@@ -569,17 +569,32 @@ def qc_trimmed_reads(input_fastq, report):
 
 def bwa_map_and_sort(output_bam, ref_genome, fq1, fq2=None, read_group=None, threads=1):
 	
-	bwa_args = "mem -t {threads} {rg} {ref} {fq1} \
-	            ".format(threads=threads, 
-                        rg="-R '%s'" % read_group if read_group!=None else "", 
-                        ref=ref_genome, fq1=fq1)
-	if fq2 != None:
-		bwa_args += fq2
+	bwa_aln_args = "aln -l10 -k1 -t {threads} {ref} {fq1} \
+			".format(threads=threads, 
+	                         ref=ref_genome, fq1=fq1)
 
-	samtools_args = "sort -o {out}".format(out=output_bam)
+	bwa_samse_args = "samse {rg} {ref} - {fq} \
+	            ".format(rg="-R '%s'" % read_group if read_group!=None else "", 
+                        ref=ref_genome, fq=fq)
 
-	run_piped_command(bwa, bwa_args, None,
-	                  samtools, samtools_args, None)
+# PE is rather not applicable to miRNAs - NOT TESTED!
+#
+#	bwa_sampe_args = "sampe {rg} {ref} - {fq1} {fq2} \
+#	            ".format(rg="-R '%s'" % read_group if read_group!=None else "", 
+#                        ref=ref_genome, fq1=fq1, fq2=fq2)
+
+	
+	samtools_args = "sort -o {out} -".format(out=output_bam)
+
+#	if fq2 == None:
+	run_piped_command(bwa, bwa_aln_args, None,
+                          bwa, bwa_samse_args, None,
+                          samtools, samtools_args, None)
+#	else:
+#	run_piped_command(bwa, bwa_aln_args, None,
+#                          bwa, bwa_sampe_args, None,
+#                          samtools, samtools_args, None)
+	
 
 def merge_bams(out_bam, *in_bams):
 	threads = 1
