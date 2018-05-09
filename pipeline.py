@@ -662,21 +662,25 @@ def map_trimmed_reads(fastqs, bam_file, sample_id):
 
 
 @transform(map_trimmed_reads, suffix('.bam'), '.bam.bai')
-def index_bam_task(bam, _):
+def index_merged_bam(bam, _):
     """ Index initial bam """
     index_bam(bam)
 
 
-@follows(index_bam_task)
-@transform(map_trimmed_reads, suffix('.bam'), '.dedup.bam', '\1.dedup.log')
-def dedup_by_umi(input_bam, output_bam, logfile):
+@follows(index_merged_bam)
+@transform(map_trimmed_reads, suffix('.bam'), '.dedup.bam', r'\1.dedup.log')
+def dedup_by_umi(input_bam, dedupped_bam, logfile):
     """ Dedup reads with the same mapping start and UMI """
-    args = 'dedup -I {input_bam} -S {dedup_bam} -L {logfile}\
-	   '.format(input_bam=input_bam, dedup_bam=dedup_bam, logfile=logfile)
+    args = 'dedup -I {inbam} -S {outbam} -L {log}\
+	   '.format(inbam=input_bam, outbam=dedupped_bam, log=logfile)
 
-    run_cmd(umitools, args, dockerize=dockerize, cpus=threads, mem_per_cpu=int(mem/threads))
+    run_cmd(umitools, args, dockerize=dockerize)
 
 
+@transform(dedup_by_umi, suffix('.bam'), '.bam.bai')
+def index_deduped_bam(bam, _):
+    """ Index initial bam """
+    index_bam(bam)
 
 
 
