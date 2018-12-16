@@ -5,26 +5,44 @@
 
 ## Pipeline
 
-The pipeline consists of (optional) bcl2fastq, Trimmomatic, FastQC, BWA, SAMtools, Picard-tools, and ... 
+The pipeline consists of 
+
+  bcl2fastq (optional),
+  Trimmomatic, 
+  umi trimming script (umi_trimmer.py)
+  BWA & SAMtools,
+  umitools,
+  FastQC,
 
 
 
 ## Setup
 
-### Pipeline
+### Dockerized executables mode
 
-1. Install Python if you don't have it from before, and a cool python package - `Ruffus` (http://www.ruffus.org.uk/). 
-Running jobs on a cluster (PBS, Slurm, etc) requires `drmaa` package. 
-You might also need following packages: optparse, logging, shutil
+TBD
+
+### Native execution mode
+
+1. Install Python package `Ruffus` (http://www.ruffus.org.uk/). 
+Running jobs on a cluster (PBS, Slurm, etc) requires additional `drmaa` package. 
 
 2. Clone the pipeline repository:
 `git clone https://github.com/seru71/mirna-profiling-pipeline.git <PIPELINE_HOME>`
 
-3. Change directory to newly created pipeline dir, and select the desired version
+3. Change directory to newly created pipeline dir
 ```
 cd <PIPELINE_HOME>
-git checkout v0.1
 ```
+4. Specify in pipeline_settings.cfg:
+ 
+  input data paths - either runfolder path or regex pointing to FASTQ files
+  reference-root - path to where BWA indexed reference genome is expected
+  reference-fasta - fasta file with reference genome
+  scratch-root - work dir
+  adapters-fasta - fasta file with adapters for Trimmomatic
+  paths to executables
+
 
 
 ## Usage
