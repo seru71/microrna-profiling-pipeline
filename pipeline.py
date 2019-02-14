@@ -382,7 +382,7 @@ def run_cmd(cmd, args, dockerize, interpreter_args=None, run_locally=True,
     full_cmd = ("{docker} "+cmd).format(docker = docker if dockerize else "",
                                         args=args, 
                                         interpreter_args = interpreter_args if interpreter_args!=None else "")
-#    print full_cmd
+    #print full_cmd
     stdout, stderr = "", ""
     slurm_account = "default"
 
@@ -463,7 +463,7 @@ def produce_fastqc_report(fastq_file, output_dir=None):
 #88888888888888888888888888888888888888888888888888888888888888888888888888888888888888888
 
 from ruffus import *
-from umi_trimmer import trim_umi
+
 
 #
 #
@@ -507,7 +507,10 @@ def link_fastqs(fastq_in, fastq_out):
     if not os.path.exists(fastq_out):
         os.symlink(fastq_in, fastq_out) 
 
-    
+   
+
+PRE_UMI_ADAPTER='AACTGTAGGCACCATCAAT'
+ 
     
 #
 # Input FASTQ filenames are expected to have following format:
@@ -525,23 +528,28 @@ def trim_reads1(input_fq, output_fq):
             {in_fq} {out_fq} \
             ILLUMINACLIP:{adapter}:2:30:8 \
             SLIDINGWINDOW:4:15".format(in_fq=input_fq, out_fq=output_fq, adapter=adapters)
-    # MINLEN:15
+
+#    # if umis are used, set minimum length of reat after adapter trimming to 12nt + lem(pre_umi_adapter) + umi_length
+#    if PRE_UMI_ADAPTER:
+#        minumilen=10
+#        minlen = 12 + len(PRE_UMI_ADAPTER) + minumilen
+#        args += " MINLEN:%s" % minlen
+
     max_mem = 2048
     run_cmd(trimmomatic, args, interpreter_args="-Xmx"+str(max_mem)+"m", 
             dockerize=dockerize, cpus=1, mem_per_cpu=max_mem)
 
+
 @transform(trim_reads1, suffix('.tmp.gz'),  '.gz')
 def trim_reads(input_fq, output_fq):
 
-    # trim UMIs
-    pre_umi_adapter="AACTGTAGGCACCATCAAT"
-    umi_stats = trim_umi(input_fq, output_fq, pre_umi_adapter)
-
-    umi_stats_file = output_fq+'.umistats'
-    with open(umi_stats_file, 'w') as statsf:
-	statsf.write(str(umi_stats))
-
-
+    if not PRE_UMI_ADAPTER:
+        os.symlink(input_fq, output_fq)
+    else:
+        # trim UMIs 
+        umi_stats_file = output_fq+'.umistats'
+        args = " ".join([input_fq, output_fq, PRE_UMI_ADAPTER, ">", umi_stats_file])
+        run_cmd("python umi_trimmer.py {args}", args, dockerize=dockerize)
 
 
 
@@ -646,7 +654,7 @@ def map_reads(fastq_list, ref_genome, output_bam, read_groups=None):
             "{subpath[0][0]}/{subdir[0][0]}.bam",
             "{SAMPLE_ID[0]}")
 def map_trimmed_reads(fastqs, bam_file, sample_id):
-    """ Maps trimmed paired and unpaired reads. """
+    """ Maps trimmed reads from all lanes """
     read_groups = ['@RG\\tID:{rgid}\\tSM:{lb}\\tLB:{lb}'\
 			.format(rgid=sample_id+"_"+lane_id, lb=sample_id) for lane_id in ['L001', 'L002', 'L003', 'L004']]
     map_reads(fastqs, reference, bam_file, read_groups)

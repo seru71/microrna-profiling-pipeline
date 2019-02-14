@@ -97,3 +97,11 @@ def trim_umi(input_fname, output_fname, preumi_adapter,
 	    'SHORT_UMI': cnt_short_umi}
     
 
+import sys
+if __name__ == '__main__':
+
+    if len(sys.argv) < 4:
+        print 'Usage: umi_trimmer.py IN_FASTQ OUT_FASTQ UMI_ADAPTER_SEQUENCE'
+        print 'Example: umi_trimmer.py Sample1_R1.fastq.gz Sample1_R1.trimmed.fastq.gz ACGTACGTACGTACGT'
+    else:
+        print trim_umi(sys.argv[1], sys.argv[2], sys.argv[3])
