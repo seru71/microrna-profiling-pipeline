@@ -326,7 +326,9 @@ if __name__ == '__main__':
       
     
     # reference files
-    reference = os.path.join(reference_root, config.get('Resources','reference-fasta'))
+    mirbase_reference = os.path.join(reference_root, config.get('Resources','mirbase-fasta'))
+    genome_reference  = os.path.join(reference_root, config.get('Resources','genome-fasta'))
+    annotation_gtf    = os.path.join(reference_root, config.get('Resources','annotation-gtf'))
     
     try:
         adapters = os.path.join(reference_root, config.get('Resources', 'adapters-fasta'))
@@ -341,9 +343,8 @@ if __name__ == '__main__':
     samtools = config.get('Tools','samtools')
     umitools = config.get('Tools','umitools')
     picard = config.get('Tools','picard-tools')
-#    qualimap = config.get('Tools','qualimap')
-
-
+    featurecounts = config.get('Tools','featurecounts')
+        
 
 
 #88888888888888888888888888888888888888888888888888888888888888888888888888888888888888888
@@ -509,6 +510,20 @@ def link_fastqs(fastq_in, fastq_out):
 
    
 
+
+"""
+
+
+Alternative method of umi & adapter trimming is:
+
+umi_tools extract --extract-method='regex' --bc-pattern '.{15}.*(?P<discard_1>AACTGTAGGCACCATCAAT)(?P<umi_1>.{12})(?P<discard_2>.*)'
+
+
+"""
+
+
+
+
 PRE_UMI_ADAPTER='AACTGTAGGCACCATCAAT'
  
     
@@ -587,8 +602,28 @@ def qc_trimmed_reads(input_fastq, report):
 
 
 
+def bwa_map_and_sort_pe(output_bam, ref_genome, fq1, fq2, read_group=None, threads=1):
+    raise Exception('Not implemented')
+#
+#   NOT TESTED!
+#
+#	bwa_aln_args = "aln -l10 -k1 -t {threads} {ref} {fq1} \
+#			".format(threads=threads, 
+#	                         ref=ref_genome, fq1=fq1)
+#
+#	bwa_sampe_args = "sampe {rg} {ref} - {fq1} {fq2} \
+#	            ".format(rg="-r '%s'" % read_group if read_group!=None else "", 
+#                        ref=ref_genome, fq1=fq1, fq2=fq2)
+#
+#	samtools_args = "sort -o {out} -".format(out=output_bam)
+#
+#	run_piped_command(bwa, bwa_aln_args, None,
+#                          bwa, bwa_sampe_args, None,
+#                          samtools, samtools_args, None)
 
-def bwa_map_and_sort(output_bam, ref_genome, fq1, fq2=None, read_group=None, threads=1):
+
+
+def bwa_map_and_sort_se(output_bam, ref_genome, fq1, read_group=None, threads=1):
 	
 	bwa_aln_args = "aln -l10 -k1 -t {threads} {ref} {fq1} \
 			".format(threads=threads, 
@@ -597,24 +632,12 @@ def bwa_map_and_sort(output_bam, ref_genome, fq1, fq2=None, read_group=None, thr
 	bwa_samse_args = "samse {rg} {ref} - {fq} \
 	            ".format(rg="-r '%s'" % read_group if read_group!=None else "", 
                         ref=ref_genome, fq=fq1)
-
-# PE is rather not applicable to miRNAs - NOT TESTED!
-#
-#	bwa_sampe_args = "sampe {rg} {ref} - {fq1} {fq2} \
-#	            ".format(rg="-r '%s'" % read_group if read_group!=None else "", 
-#                        ref=ref_genome, fq1=fq1, fq2=fq2)
-
 	
 	samtools_args = "sort -o {out} -".format(out=output_bam)
 
-#	if fq2 == None:
 	run_piped_command(bwa, bwa_aln_args, None,
                           bwa, bwa_samse_args, None,
                           samtools, samtools_args, None)
-#	else:
-#	run_piped_command(bwa, bwa_aln_args, None,
-#                          bwa, bwa_sampe_args, None,
-#                          samtools, samtools_args, None)
 	
 
 def merge_bams(out_bam, *in_bams):
@@ -638,9 +661,9 @@ def map_reads(fastq_list, ref_genome, output_bam, read_groups=None):
     tmp_bams = [ output_bam+str(i) for i in range(0, len(fastq_list)) ]
     for i in range(0, len(fastq_list)):
 		if isinstance(fastq_list[i], tuple):
-			bwa_map_and_sort(tmp_bams[i], ref_genome, fastq_list[i][0], fastq_list[i][1], read_groups[i])
+			bwa_map_and_sort_pe(tmp_bams[i], ref_genome, fastq_list[i][0], fastq_list[i][1], read_groups[i])
 		else:
-			bwa_map_and_sort(tmp_bams[i], ref_genome, fastq_list[i], read_group=read_groups[i])   
+			bwa_map_and_sort_se(tmp_bams[i], ref_genome, fastq_list[i], read_group=read_groups[i])   
     
     merge_bams(output_bam, *tmp_bams)
     
@@ -648,35 +671,49 @@ def map_reads(fastq_list, ref_genome, output_bam, read_groups=None):
         os.remove(f)
 
 
-#@transform(trim_reads, formatter(), "{subpath[0][0]}/{subdir[0][0]}.bam")
 @collate(trim_reads, 
             formatter("(.+)/(?P<SAMPLE_ID>[^/]+)_L\d\d\d\.fq\.gz$"), 
             "{subpath[0][0]}/{subdir[0][0]}.bam",
             "{SAMPLE_ID[0]}")
-def map_trimmed_reads(fastqs, bam_file, sample_id):
+def map_to_mirbase(fastqs, bam_file, sample_id):
     """ Maps trimmed reads from all lanes """
     read_groups = ['@RG\\tID:{rgid}\\tSM:{lb}\\tLB:{lb}'\
 			.format(rgid=sample_id+"_"+lane_id, lb=sample_id) for lane_id in ['L001', 'L002', 'L003', 'L004']]
-    map_reads(fastqs, reference, bam_file, read_groups)
+    map_reads(fastqs, mirbase_reference, bam_file, read_groups)
 
 
-#888888888888888888888888888888888888888888
-#
-#
-#   Postprocessing
-#
-#
-#88888888888888888888888888888888888888888888
+@transform(map_to_mirbase, suffix('.bam'), '.unmapped.fq.gz')
+def extract_unmapped(bam, fastq):
+    samtools_args = "view -h -f4 {}".format(bam)
+    picard_args = "SamToFastq I=/dev/stdin F={} VALIDATION_STRINGENCY=LENIENT".format(fastq)
+    
+    run_piped_command(samtools, samtools_args, None,
+                        picard, picard_args, None)
 
 
-@transform(map_trimmed_reads, suffix('.bam'), '.bam.bai')
-def index_merged_bam(bam, _):
-    """ Index initial bam """
+
+@transform(extract_unmapped, suffix('.fq.gz'), '.bam')
+def map_unmapped(fastq, bam):
+    map_reads([fastq], genome_reference, bam)
+
+
+
+    #888888888888888888888888888888888888888888
+    #
+    #        U M I   d e d u p i n g
+    #
+    #88888888888888888888888888888888888888888888
+
+
+
+@transform(map_to_mirbase, suffix('.bam'), '.bam.bai')
+def index_mirbase_bam(bam, _):
+    """ Index mirbase bam """
     index_bam(bam)
 
 
-@follows(index_merged_bam)
-@transform(map_trimmed_reads, suffix('.bam'), '.dedup.bam', r'\1.dedup.log')
+@follows(index_mirbase_bam)
+@transform(map_to_mirbase, suffix('.bam'), '.dedup.bam', r'\1.dedup.log')
 def dedup_by_umi(input_bam, dedupped_bam, logfile):
     """ Dedup reads with the same mapping start and UMI """
     args = 'dedup -I {inbam} -S {outbam} -L {log}\
@@ -685,90 +722,67 @@ def dedup_by_umi(input_bam, dedupped_bam, logfile):
     run_cmd(umitools, args, dockerize=dockerize)
 
 
+
+
+    #888888888888888888888888888888888888888888
+    #
+    #        C o u n t i n g
+    #
+    #88888888888888888888888888888888888888888888
+
+
 @transform(dedup_by_umi, suffix('.bam'), '.bam.bai')
 def index_deduped_bam(bam, _):
-    """ Index initial bam """
+    """ Index deduped bam """
     index_bam(bam)
 
 
+@follows(index_deduped_bam)
+@transform(dedup_by_umi, suffix('.bam'), '.bam.mirbase_counts.txt')
+def count_mirbase_reads(bam, counts_file):
+    """ Count mirbase hits """
+    run_piped_command(samtools, "idxstats %s" % bam, None,
+                      "cut {args}", "-f1,3 > %s" % counts_file, None)
 
-#
-# ------------------------------------------------------------------- #
-#
-
-
-#
-#
-# Align reads and create raw BAM files (one per sample)
-# 
-
-
-
-#
-# FASTQ filenames are expected to have following format:
-#    [SAMPLE_ID]_[LANE_ID].fq.gz
-# The output will be written to BAM file:
-#    [SAMPLE_ID]_[LANE_ID].bam
-#
-@active_if(run_folder != None or input_fastqs != None)
-@transform(trim_reads, suffix('.fq.gz'), '.bam')
-def align_reads(fastq, bam):
-    threads = 2
+@merge(count_mirbase_reads, os.path.join(runs_scratch_dir, "mirna_count_table.txt"))
+def produce_mirna_counts_table(count_files, table_file):
+    """ Join per sample count tables """
     
-    # construct read group information from fastq file name (assuming [SAMPLE_ID]_[LANE_ID].fq.gz format)
-    sample_lane = os.path.basename(fastq)[0:-len(".fq.gz")]
-    sample = "_".join(sample_lane.split("_")[0:-1])
-    lane = sample_lane.split("_")[-1]
-    read_group = "@RG\\tID:{id}\\tSM:{sm}\\tLB:{lb}\\tPL:{pl}\\tPU:{pu} \
-                 ".format(id=sample_lane, sm=sample, lb=sample, pl="ILLUMINA", pu=lane)
-                 
-    args = "mem -t {threads} -R {rg} {ref} {fq} \
-	    ".format(threads=threads, rg=read_group, ref=reference, fq=fastq)
-    iargs = "samtools view -b -o {bam} -".format(bam=bam)
-
-    run_cmd(bwa, args, interpreter_args=iargs, 
-            dockerize=dockerize, cpus=threads, mem_per_cpu=8192/threads)
+    sample_ids = [os.path.basename(f)[:-len(".dedup.bam.mirbase_counts.txt")] for f in count_files]
+    header = "mirna\t" + '\t'.join(sample_ids) + '\n'
+    with open(table_file, 'w') as f:
+        f.write(header)
     
+    inputs = " ".join(count_files)
+    run_cmd("paste {inputs} | \
+             cut -f1,$(echo `seq 2 2 {num}` | sed 's/ /,/g') \
+             >> {table}".format(inputs=inputs, num=2*len(inputs), table=table_file), "", None)
+
+@transform(map_unmapped, suffix('.bam'), '.bam.bai')
+def index_genome_bam(bam, _):
+    """ Index genome bam """
+    index_bam(bam)
 
 
-def clean_fastqs_and_lane_bams():
-    """ Remove the trimmed fastq files, and SAM files. Links to original fastqs are kept """
-    for f in glob.glob(os.path.join(runs_scratch_dir,'*','*.fq.gz')):
-        os.remove(f)
-    for f in glob.glob(os.path.join(runs_scratch_dir,'*','*_L\d\d\d.bam')):
-        os.remove(f)
+@follows(index_genome_bam)
+@transform(map_unmapped, suffix('.bam'), '.bam.counts')
+def count_unmapped_reads_by_category(bam, counts_file):
+    """ Count genome features hit by mirbase-unmapped reads """
+    args = "-t gene -g gene_biotype -O -M --fraction \
+            -a {gtf} -o {out} {bam} \
+            ".format(gtf=annotation_gtf, out=counts_file, bam=bam)
 
-#
-# BAM filenames are expected to have following format:
-#    [SAMPLE_ID]_[LANE_ID].bam
-# In this step, all BAM files matching on the SAMPLE_ID will be merged into one BAM file:
-#    [SAMPLE_ID].bam
-# SAMPLE_ID can contain all signs except path delimiter, i.e. "\"
-#
-@active_if(run_folder != None or input_fastqs != None)
-@collate(align_reads, regex(r"(.+)/([^/]+)_L.+\.bam$"),  r'\1/\2.bam')
-@posttask(clean_fastqs_and_lane_bams)
-def merge_lanes(lane_bams, out_bam):
-    args = "MergeSamFiles O={bam} \
-            SORT_ORDER=unsorted \
-            ASSUME_SORTED=true \
-            ".format(bam=out_bam)
-    # include all bam files as args
-    for bam in lane_bams:
-        args += " I={bam}".format(bam=bam)
-        
-    run_cmd(picard, args, interpreter_args="-Xmx4g", 
-            dockerize=dockerize, mem_per_cpu=4096)
+    run_cmd(featurecounts, args, dockerize=dockerize)
     
-
-@transform(merge_lanes, suffix(".bam"), '.bam.bai')
-def index(bam, output):
-    """Create raw bam index"""
-  #  index_bam(bam)
+    # extract sorted list of counts
+    tmp_name = counts_file+".list"
+    run_cmd("cut -f1,7 {} | sort -k2 -nr > {} \
+            ".format(counts_file,tmp_name) , "", dockerize=dockerize)
+    os.rename(tmp_name, counts_file)
 
 
 #@posttask(cleanup_files)
-@follows(merge_lanes)
+@follows(count_mirbase_reads, count_unmapped_reads_by_category)
 def complete_run():
     pass
 
@@ -780,8 +794,9 @@ def complete_run():
 
 #   Main logic
 
-
 #88888888888888888888888888888888888888888888888888888888888888888888888888888888888888888
+
+
 if __name__ == '__main__':
     if options.just_print:
         pipeline_printout(sys.stdout, options.target_tasks, options.forced_tasks,
