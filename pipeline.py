@@ -383,7 +383,7 @@ def run_cmd(cmd, args, dockerize, interpreter_args=None, run_locally=True,
     full_cmd = ("{docker} "+cmd).format(docker = docker if dockerize else "",
                                         args=args, 
                                         interpreter_args = interpreter_args if interpreter_args!=None else "")
-    #print full_cmd
+#    print full_cmd
     stdout, stderr = "", ""
     slurm_account = "default"
 
@@ -679,8 +679,8 @@ def map_to_mirbase(fastqs, bam_file, sample_id):
     """ Maps trimmed reads from all lanes """
     read_groups = ['@RG\\tID:{rgid}\\tSM:{lb}\\tLB:{lb}'\
 			.format(rgid=sample_id+"_"+lane_id, lb=sample_id) for lane_id in ['L001', 'L002', 'L003', 'L004']]
-    map_reads(fastqs, mirbase_reference, bam_file, read_groups)
-
+    map_reads(fastqs, mirbase_reference, bam_file, read_groups)    
+    
 
 @transform(map_to_mirbase, suffix('.bam'), '.unmapped.fq.gz')
 def extract_unmapped(bam, fastq):
@@ -774,11 +774,96 @@ def count_unmapped_reads_by_category(bam, counts_file):
 
     run_cmd(featurecounts, args, dockerize=dockerize)
     
-    # extract sorted list of counts
+    # extract counts only
     tmp_name = counts_file+".list"
-    run_cmd("cut -f1,7 {} | sort -k2 -nr > {} \
+    run_cmd("cut -f1,7 {} > {} \
             ".format(counts_file,tmp_name) , "", dockerize=dockerize)
     os.rename(tmp_name, counts_file)
+
+
+    #888888888888888888888888888888888888888888
+    #
+    #        Q C   t a b l e s 
+    #
+    #88888888888888888888888888888888888888888888
+
+
+
+def run_flagstat(bam):
+    run_cmd(samtools, 
+            "flagstat {} > {} ".format(bam, bam+'.flagstat'), 
+            dockerize=dockerize)
+
+
+@transform(map_to_mirbase, suffix(".bam"), ".bam.flagstat")
+def flagstat_mirbase_bam(bam, _):
+    run_flagstat(bam)
+    
+@transform(map_unmapped, suffix(".bam"), ".bam.flagstat")
+def flagstat_unmapped_bam(bam, _):
+    run_flagstat(bam)
+    
+    
+def list_to_tsv_line(l):
+    return('\t'.join(l) + '\n')
+
+def get_total_and_mapped_from_flagstats(flagstat_files, file_suffix='.flagstat', header_list=['sample','total','mapped']):
+    out = list_to_tsv_line(header_list)
+    for fname in flagstat_files:
+        sample_id = os.path.basename(fname)[:-len(file_suffix)]
+        with open(fname) as f:
+            top_lines = f.readlines()[0:5]
+            lines = [top_lines[i] for i in [0,4]]
+            total, mapped = [l.split(" ")[0] for l in lines]
+            out += list_to_tsv_line([sample_id, total, mapped])
+    return out
+    
+
+@merge(flagstat_mirbase_bam, os.path.join(runs_scratch_dir, "qc", "mirbase_mapping_stats.tsv"))
+def aggregate_mirbase_mapping_stats(flagstats, out_table):
+    with open(out_table,"wt") as out:
+        out.write(get_total_and_mapped_from_flagstats(flagstats, header_list=['sample','mirbase_total','mirbase_mapped']))
+
+
+@merge(flagstat_unmapped_bam, os.path.join(runs_scratch_dir, "qc", "unmapped_mapping_stats.tsv"))
+def aggregate_unmapped_mapping_stats(flagstats, out_table):
+     with open(out_table,"wt") as out:
+        out.write(get_total_and_mapped_from_flagstats(flagstats, header_list=['sample','unmapped_total','unmapped_mapped']))
+
+@merge(count_unmapped_reads_by_category, os.path.join(runs_scratch_dir, "qc", "unmapped_biofeature_stats.tsv"))
+def aggregate_unmapped_biofeatures(input_files, out_table):
+    header = "sample"
+    content = ""
+    for i, fname in enumerate(input_files):
+        sample_id = os.path.basename(fname)[:-len(".unmapped.bam.counts")]
+        content += sample_id
+        with open(fname) as f:
+            for l in f.xreadlines():
+                if l[0]=='#' or l.find("Geneid") == 0: continue
+                cat, count = l.strip().split()
+                content += '\t'+count
+                if i == 0: header += '\t'+cat
+        content += '\n'
+    
+    with open(out_table, 'wt') as f:
+        f.write(header + '\n' + content)
+
+
+@transform(aggregate_mirbase_mapping_stats, formatter(), 
+          add_inputs(aggregate_unmapped_mapping_stats), 
+          os.path.join(runs_scratch_dir, "qc", "mapping_stats.tsv"))
+def join_mapping_stats(input_stats, out_stats):
+    print input_stats
+    mirbase_stats, unmapped_stats = input_stats[0], input_stats[1]
+    args = '{} {} | cut -f 1-3,5,6 > {}\
+           '.format(mirbase_stats, unmapped_stats, out_stats)
+    run_cmd('paste {args}', args, dockerize=dockerize)
+
+
+@follows(aggregate_mirbase_mapping_stats, aggregate_unmapped_mapping_stats)
+def qc_mapping():
+    pass
+
 
 
 #@posttask(cleanup_files)
