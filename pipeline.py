@@ -510,21 +510,38 @@ def link_fastqs(fastq_in, fastq_out):
 
    
 
-
-"""
-
-
-Alternative method of umi & adapter trimming is:
-
-umi_tools extract --extract-method='regex' --bc-pattern '.{15}.*(?P<discard_1>AACTGTAGGCACCATCAAT)(?P<umi_1>.{12})(?P<discard_2>.*)'
-
-
-"""
-
-
+    #88888888888888888888888888888888888888888888888888
+    #
+    #   R e a d   t r i m m i n g
+    #
+    #88888888888888888888888888888888888888888888888888
 
 
 PRE_UMI_ADAPTER='AACTGTAGGCACCATCAAT'
+
+# Input FASTQ filenames are expected to have following format:
+#    [SAMPLE_ID]_[S_NUM]_[LANE_ID]_R1_001.fastq.gz
+# The output will be written to:
+#    [SAMPLE_ID]_[LANE_ID].fq.gz
+# SAMPLE_ID can contain all signs except path delimiter, i.e. "\"
+
+@active_if(run_folder != None or input_fastqs != None)
+@transform(link_fastqs, regex(r'(.+)/([^/]+)_S[1-9]\d?_(L\d\d\d)_R1_001\.fastq\.gz$'),  r'\1/\2_\3.fq.tmp.gz')
+def extract_umi(input_fq, output_fq):
+    """ Trim reads to the beginning of UMI adaper and extract UMI sequence to read identifier """ 
+    
+    pattern = ".{15}.*(?P<discard_1>%s)(?P<umi_1>.{12})(?P<discard_2>.*)" % PRE_UMI_ADAPTER
+    logfile = output_fq+'.log'
+    
+    args = "extract -I {infq} -S {outfq} -L {log} \
+                    --extract-method='regex' \
+                    --bc-pattern '{pattern}' \
+                    ".format(infq=input_fq, 
+                             outfq=output_fq, 
+                             log=logfile, 
+                             pattern=pattern)
+    
+    run_cmd(umitools, args, dockerize=dockerize)
  
     
 #
@@ -536,13 +553,15 @@ PRE_UMI_ADAPTER='AACTGTAGGCACCATCAAT'
 #
 @active_if(run_folder != None or input_fastqs != None)
 @transform(link_fastqs, regex(r'(.+)/([^/]+)_S[1-9]\d?_(L\d\d\d)_R1_001\.fastq\.gz$'),  r'\1/\2_\3.fq.tmp.gz')
-def trim_reads1(input_fq, output_fq):
+def trim_reads_and_extract_umi(input_fq, output_fq):
 
+    intermediate_fq = output_fq+".intermediate.gz"
+    
     # trim adapters
     args = "SE -phred33 -threads 1 \
             {in_fq} {out_fq} \
             ILLUMINACLIP:{adapter}:2:30:8 \
-            SLIDINGWINDOW:4:15".format(in_fq=input_fq, out_fq=output_fq, adapter=adapters)
+            SLIDINGWINDOW:4:15".format(in_fq=input_fq, out_fq=intermediate_fq, adapter=adapters)
 
 #    # if umis are used, set minimum length of reat after adapter trimming to 12nt + lem(pre_umi_adapter) + umi_length
 #    if PRE_UMI_ADAPTER:
@@ -554,17 +573,20 @@ def trim_reads1(input_fq, output_fq):
     run_cmd(trimmomatic, args, interpreter_args="-Xmx"+str(max_mem)+"m", 
             dockerize=dockerize, cpus=1, mem_per_cpu=max_mem)
 
-
-@transform(trim_reads1, suffix('.tmp.gz'),  '.gz')
-def trim_reads(input_fq, output_fq):
-
-    if not PRE_UMI_ADAPTER:
-        os.symlink(input_fq, output_fq)
-    else:
+    if PRE_UMI_ADAPTER:
         # trim UMIs 
         umi_stats_file = output_fq+'.umistats'
-        args = " ".join([input_fq, output_fq, PRE_UMI_ADAPTER, ">", umi_stats_file])
+        args = " ".join([intermediate_fq, output_fq, PRE_UMI_ADAPTER, ">", umi_stats_file])
         run_cmd("python umi_trimmer.py {args}", args, dockerize=dockerize)
+    else:
+        os.symlink(intermediate_fq, output_fq)
+
+
+
+@transform(os.path.join(runs_scratch_dir,"*","*.tmp.gz"), suffix(".tmp.gz"), ".gz")
+def trim_reads(input_fq, output_fq):
+    os.symlink(input_fq, output_fq)
+
 
 
 
