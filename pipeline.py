@@ -425,7 +425,7 @@ def run_piped_command(*args):
                   ".format(cpus=cpus, mem=int(1.2*mem_per_cpu), time=walltime)
 	
     full_cmd = expand_piped_command(*args)
-    print full_cmd	
+#    print full_cmd	
     try:
         stdout, stderr = run_job(full_cmd.strip(), 
                                  job_other_options=job_options,
@@ -647,17 +647,19 @@ def bwa_map_and_sort_pe(output_bam, ref_genome, fq1, fq2, read_group=None, threa
 
 def bwa_map_and_sort_se(output_bam, ref_genome, fq1, read_group=None, threads=1):
 	
-	bwa_aln_args = "aln -l10 -k1 -t {threads} {ref} {fq1} \
-			".format(threads=threads, 
-	                         ref=ref_genome, fq1=fq1)
+	#bwa_aln_args = "aln -l10 -k1 -t {threads} {ref} {fq1} \
+    
+    bwa_aln_args = "aln -t {threads} {ref} {fq1} \
+                   ".format(threads=threads, 
+                            ref=ref_genome, fq1=fq1)
 
-	bwa_samse_args = "samse {rg} {ref} - {fq} \
-	            ".format(rg="-r '%s'" % read_group if read_group!=None else "", 
+    bwa_samse_args = "samse {rg} {ref} - {fq} \
+                     ".format(rg="-r '%s'" % read_group if read_group!=None else "", 
                         ref=ref_genome, fq=fq1)
 	
-	samtools_args = "sort -o {out} -".format(out=output_bam)
+    samtools_args = "sort -o {out} -".format(out=output_bam)
 
-	run_piped_command(bwa, bwa_aln_args, None,
+    run_piped_command(bwa, bwa_aln_args, None,
                           bwa, bwa_samse_args, None,
                           samtools, samtools_args, None)
 	
@@ -738,7 +740,7 @@ def index_mirbase_bam(bam, _):
 @transform(map_to_mirbase, suffix('.bam'), '.dedup.bam', r'\1.dedup.log')
 def dedup_by_umi(input_bam, dedupped_bam, logfile):
     """ Dedup reads with the same mapping start and UMI """
-    args = 'dedup -I {inbam} -S {outbam} -L {log}\
+    args = 'dedup -I {inbam} -S {outbam} -L {log} --method unique \
 	   '.format(inbam=input_bam, outbam=dedupped_bam, log=logfile)
 
     run_cmd(umitools, args, dockerize=dockerize)
@@ -825,11 +827,15 @@ def flagstat_mirbase_bam(bam, _):
 def flagstat_unmapped_bam(bam, _):
     run_flagstat(bam)
     
+@transform(dedup_by_umi, suffix(".bam"), ".bam.flagstat")
+def flagstat_deduped_bam(bam, _):
+    run_flagstat(bam)
+
     
 def list_to_tsv_line(l):
     return('\t'.join(l) + '\n')
 
-def get_total_and_mapped_from_flagstats(flagstat_files, file_suffix='.flagstat', header_list=['sample','total','mapped']):
+def get_total_and_mapped_from_flagstats(flagstat_files, file_suffix='.bam.flagstat', header_list=['sample','total','mapped']):
     out = list_to_tsv_line(header_list)
     for fname in flagstat_files:
         sample_id = os.path.basename(fname)[:-len(file_suffix)]
@@ -844,13 +850,22 @@ def get_total_and_mapped_from_flagstats(flagstat_files, file_suffix='.flagstat',
 @merge(flagstat_mirbase_bam, os.path.join(runs_scratch_dir, "qc", "mirbase_mapping_stats.tsv"))
 def aggregate_mirbase_mapping_stats(flagstats, out_table):
     with open(out_table,"wt") as out:
-        out.write(get_total_and_mapped_from_flagstats(flagstats, header_list=['sample','mirbase_total','mirbase_mapped']))
+        out.write(get_total_and_mapped_from_flagstats(flagstats, 
+                                                      header_list=['sample','mirbase_total','mirbase_mapped']))
 
 
 @merge(flagstat_unmapped_bam, os.path.join(runs_scratch_dir, "qc", "unmapped_mapping_stats.tsv"))
 def aggregate_unmapped_mapping_stats(flagstats, out_table):
      with open(out_table,"wt") as out:
-        out.write(get_total_and_mapped_from_flagstats(flagstats, header_list=['sample','unmapped_total','unmapped_mapped']))
+        out.write(get_total_and_mapped_from_flagstats(flagstats, file_suffix='.unmapped.bam.flagstat',
+                                                      header_list=['sample','unmapped_total','unmapped_mapped']))
+
+@merge(flagstat_deduped_bam, os.path.join(runs_scratch_dir, "qc", "deduped_mapping_stats.tsv"))
+def aggregate_deduped_mapping_stats(flagstats, out_table):
+     with open(out_table,"wt") as out:
+        out.write(get_total_and_mapped_from_flagstats(flagstats, file_suffix='.dedup.bam.flagstat',
+                                                      header_list=['sample','deduped_total','deduped_mapped']))
+
 
 @merge(count_unmapped_reads_by_category, os.path.join(runs_scratch_dir, "qc", "unmapped_biofeature_stats.tsv"))
 def aggregate_unmapped_biofeatures(input_files, out_table):
@@ -872,24 +887,27 @@ def aggregate_unmapped_biofeatures(input_files, out_table):
 
 
 @transform(aggregate_mirbase_mapping_stats, formatter(), 
-          add_inputs(aggregate_unmapped_mapping_stats), 
+          add_inputs(aggregate_deduped_mapping_stats, aggregate_unmapped_mapping_stats, aggregate_unmapped_biofeatures), 
           os.path.join(runs_scratch_dir, "qc", "mapping_stats.tsv"))
 def join_mapping_stats(input_stats, out_stats):
-    print input_stats
-    mirbase_stats, unmapped_stats = input_stats[0], input_stats[1]
-    args = '{} {} | cut -f 1-3,5,6 > {}\
-           '.format(mirbase_stats, unmapped_stats, out_stats)
+    
+    mirbase_stats, dedup_stats, unmapped_stats, bf_stats = input_stats[0], input_stats[1], input_stats[2], input_stats[3]
+    
+    # drop sample id from all except mirbase_stats
+    # drop dedup_mapped because it is equal to dedup_total
+    args = '{} {} {} {} | cut -f 1-3,5,8-9,11- > {}\
+           '.format(mirbase_stats, dedup_stats, unmapped_stats, bf_stats, out_stats)
     run_cmd('paste {args}', args, dockerize=dockerize)
 
 
-@follows(aggregate_mirbase_mapping_stats, aggregate_unmapped_mapping_stats)
+@follows(join_mapping_stats)
 def qc_mapping():
     pass
 
 
 
 #@posttask(cleanup_files)
-@follows(count_mirbase_reads, count_unmapped_reads_by_category)
+@follows(produce_mirna_counts_table, qc_mapping)
 def complete_run():
     pass
 
