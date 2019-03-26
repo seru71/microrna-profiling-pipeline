@@ -340,6 +340,7 @@ if __name__ == '__main__':
     fastqc = config.get('Tools','fastqc')
     trimmomatic = config.get('Tools', 'trimmomatic') 
     bwa = config.get('Tools','bwa')
+    bowtie2 = config.get('Tools','bowtie2')
     samtools = config.get('Tools','samtools')
     umitools = config.get('Tools','umitools')
     picard = config.get('Tools','picard-tools')
@@ -425,7 +426,7 @@ def run_piped_command(*args):
                   ".format(cpus=cpus, mem=int(1.2*mem_per_cpu), time=walltime)
 	
     full_cmd = expand_piped_command(*args)
-#    print full_cmd	
+    print full_cmd	
     try:
         stdout, stderr = run_job(full_cmd.strip(), 
                                  job_other_options=job_options,
@@ -664,6 +665,29 @@ def bwa_map_and_sort_se(output_bam, ref_genome, fq1, read_group=None, threads=1)
                           samtools, samtools_args, None)
 	
 
+
+def bowtie_map_and_sort_se(output_bam, ref_genome, fq1, read_group=None, threads=1):
+    
+    rgs = read_group.split('\\t')
+    print rgs
+    rg_id = rgs[1]
+    rg_fields = ' '.join(['--rg '+s for s in rgs[2:]])
+    bowtie2_args = '-L11 --norc -k10 \
+                   --rg-id {rg_id} {rg} \
+                   -x {ref} -U {fq}'.format(ref=ref_genome, fq=fq1,
+                                            rg_id=rg_id, rg=rg_fields)
+    
+    # drop alternative alignments
+    samtools_view_args = "view -F256 -Shb"  
+    samtools_sort_args = "sort -o {out} -".format(out=output_bam)
+    
+    run_piped_command(bowtie2, bowtie2_args, None,
+                      samtools, samtools_view_args, None,
+                      samtools, samtools_sort_args, None)
+    
+    
+    
+
 def merge_bams(out_bam, *in_bams):
 	threads = 1
 	mem = 4096
@@ -675,7 +699,7 @@ def merge_bams(out_bam, *in_bams):
 	run_cmd(samtools, args, dockerize=dockerize, cpus=threads, mem_per_cpu=int(mem/threads))
 	
 	
-def map_reads(fastq_list, ref_genome, output_bam, read_groups=None):
+def map_reads(fastq_list, ref_genome, output_bam, read_groups=None, mapper='bwa'):
 
     # If no read groups is provided, we could make up default ones based on fq filenames.
     if read_groups==None:
@@ -684,11 +708,17 @@ def map_reads(fastq_list, ref_genome, output_bam, read_groups=None):
     
     tmp_bams = [ output_bam+str(i) for i in range(0, len(fastq_list)) ]
     for i in range(0, len(fastq_list)):
-		if isinstance(fastq_list[i], tuple):
-			bwa_map_and_sort_pe(tmp_bams[i], ref_genome, fastq_list[i][0], fastq_list[i][1], read_groups[i])
-		else:
-			bwa_map_and_sort_se(tmp_bams[i], ref_genome, fastq_list[i], read_group=read_groups[i])   
-    
+        if isinstance(fastq_list[i], tuple):
+            if mapper == 'bwa':
+                bwa_map_and_sort_pe(tmp_bams[i], ref_genome, fastq_list[i][0], fastq_list[i][1], read_groups[i])
+            else:
+                raise Exception('Bowtie2 PE mapping is not implemented')
+        else:
+            if mapper == 'bwa':
+                bwa_map_and_sort_se(tmp_bams[i], ref_genome, fastq_list[i], read_group=read_groups[i])   
+            else:
+                bowtie_map_and_sort_se(tmp_bams[i], ref_genome, fastq_list[i], read_group=read_groups[i])   
+
     merge_bams(output_bam, *tmp_bams)
     
     for f in tmp_bams:
@@ -697,13 +727,13 @@ def map_reads(fastq_list, ref_genome, output_bam, read_groups=None):
 
 @collate(trim_reads, 
             formatter("(.+)/(?P<SAMPLE_ID>[^/]+)_L\d\d\d\.fq\.gz$"), 
-            "{subpath[0][0]}/{subdir[0][0]}.bam",
+            "{subpath[0][0]}/{subdir[0][0]}.nopadding.bam",
             "{SAMPLE_ID[0]}")
 def map_to_mirbase(fastqs, bam_file, sample_id):
     """ Maps trimmed reads from all lanes """
     read_groups = ['@RG\\tID:{rgid}\\tSM:{lb}\\tLB:{lb}'\
 			.format(rgid=sample_id+"_"+lane_id, lb=sample_id) for lane_id in ['L001', 'L002', 'L003', 'L004']]
-    map_reads(fastqs, mirbase_reference, bam_file, read_groups)    
+    map_reads(fastqs, mirbase_reference, bam_file, read_groups, mapper='bowtie2')    
     
 
 @transform(map_to_mirbase, suffix('.bam'), '.unmapped.fq.gz')
