@@ -649,7 +649,7 @@ def bwa_map_and_sort_se(output_bam, ref_genome, fq1, read_group=None, threads=1)
 	
 	#bwa_aln_args = "aln -l10 -k1 -t {threads} {ref} {fq1} \
     
-    bwa_aln_args = "aln -t {threads} {ref} {fq1} \
+    bwa_aln_args = "aln -n1 -t {threads} {ref} {fq1} \
                    ".format(threads=threads, 
                             ref=ref_genome, fq1=fq1)
 
@@ -740,8 +740,9 @@ def index_mirbase_bam(bam, _):
 @transform(map_to_mirbase, suffix('.bam'), '.dedup.bam', r'\1.dedup.log')
 def dedup_by_umi(input_bam, dedupped_bam, logfile):
     """ Dedup reads with the same mapping start and UMI """
-    args = 'dedup -I {inbam} -S {outbam} -L {log} --method unique \
-	   '.format(inbam=input_bam, outbam=dedupped_bam, log=logfile)
+    args = "dedup -I {inbam} -S {outbam} -L {log} \
+            --method unique --mapping-quality=5 \
+	   ".format(inbam=input_bam, outbam=dedupped_bam, log=logfile)
 
     run_cmd(umitools, args, dockerize=dockerize)
 
