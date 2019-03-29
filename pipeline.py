@@ -838,7 +838,7 @@ def filter_multimapped(inbam, outbam):
     #  - tier2: 
     #    - MQ>1
     
-    samtools_view_args = "view -q5 -F256 -Shb"  
+    samtools_view_args = "view -q5 -F256 -Shb %s > %s" % (inbam, outbam)
     run_cmd(samtools, samtools_view_args, None)
 
 @transform(filter_multimapped, suffix('.bam'), '.bam.bai')
