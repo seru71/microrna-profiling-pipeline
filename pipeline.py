@@ -669,7 +669,6 @@ def bwa_map_and_sort_se(output_bam, ref_genome, fq1, read_group=None, threads=1)
 def bowtie_map_and_sort_se(output_bam, ref_genome, fq1, read_group=None, threads=1):
     
     rgs = read_group.split('\\t')
-    print rgs
     rg_id = rgs[1]
     rg_fields = ' '.join(['--rg '+s for s in rgs[2:]])
     bowtie2_args = '-L11 --norc -k10 \
@@ -677,13 +676,10 @@ def bowtie_map_and_sort_se(output_bam, ref_genome, fq1, read_group=None, threads
                    -x {ref} -U {fq}'.format(ref=ref_genome, fq=fq1,
                                             rg_id=rg_id, rg=rg_fields)
     
-    # drop alternative alignments
-    samtools_view_args = "view -F256 -Shb"  
-    samtools_sort_args = "sort -o {out} -".format(out=output_bam)
+    samtools_args = "sort -o {out} -".format(out=output_bam)
     
     run_piped_command(bowtie2, bowtie2_args, None,
-                      samtools, samtools_view_args, None,
-                      samtools, samtools_sort_args, None)
+                      samtools, samtools_args, None)
     
     
     
@@ -727,7 +723,7 @@ def map_reads(fastq_list, ref_genome, output_bam, read_groups=None, mapper='bwa'
 
 @collate(trim_reads, 
             formatter("(.+)/(?P<SAMPLE_ID>[^/]+)_L\d\d\d\.fq\.gz$"), 
-            "{subpath[0][0]}/{subdir[0][0]}.nopadding.bam",
+            "{subpath[0][0]}/{subdir[0][0]}.bam",
             "{SAMPLE_ID[0]}")
 def map_to_mirbase(fastqs, bam_file, sample_id):
     """ Maps trimmed reads from all lanes """
@@ -735,7 +731,7 @@ def map_to_mirbase(fastqs, bam_file, sample_id):
 			.format(rgid=sample_id+"_"+lane_id, lb=sample_id) for lane_id in ['L001', 'L002', 'L003', 'L004']]
     map_reads(fastqs, mirbase_reference, bam_file, read_groups, mapper='bowtie2')    
     
-
+    
 @transform(map_to_mirbase, suffix('.bam'), '.unmapped.fq.gz')
 def extract_unmapped(bam, fastq):
     samtools_args = "view -h -f4 {}".format(bam)
@@ -743,7 +739,6 @@ def extract_unmapped(bam, fastq):
     
     run_piped_command(samtools, samtools_args, None,
                         picard, picard_args, None)
-
 
 
 @transform(extract_unmapped, suffix('.fq.gz'), '.bam')
@@ -771,8 +766,10 @@ def index_mirbase_bam(bam, _):
 def dedup_by_umi(input_bam, dedupped_bam, logfile):
     """ Dedup reads with the same mapping start and UMI """
     args = "dedup -I {inbam} -S {outbam} -L {log} \
-            --method unique --mapping-quality=5 \
+            --method unique \
 	   ".format(inbam=input_bam, outbam=dedupped_bam, log=logfile)
+       
+    # --mapping-quality=5 \
 
     run_cmd(umitools, args, dockerize=dockerize)
 
@@ -786,24 +783,12 @@ def dedup_by_umi(input_bam, dedupped_bam, logfile):
     #88888888888888888888888888888888888888888888
 
 
-@transform(dedup_by_umi, suffix('.bam'), '.bam.bai')
-def index_deduped_bam(bam, _):
-    """ Index deduped bam """
-    index_bam(bam)
-
-
-@follows(index_deduped_bam)
-@transform(dedup_by_umi, suffix('.bam'), '.bam.mirbase_counts.txt')
-def count_mirbase_reads(bam, counts_file):
-    """ Count mirbase hits """
+def count_ref_hits(bam, counts_file):
     run_piped_command(samtools, "idxstats %s" % bam, None,
                       "cut {args}", "-f1,3 > %s" % counts_file, None)
 
-@merge(count_mirbase_reads, os.path.join(runs_scratch_dir, "mirna_count_table.txt"))
-def produce_mirna_counts_table(count_files, table_file):
-    """ Join per sample count tables """
-    
-    sample_ids = [os.path.basename(f)[:-len(".dedup.bam.mirbase_counts.txt")] for f in count_files]
+def merge_count_tables(count_files, table_file, suffix=".dedup.filt.bam.mirbase_counts.txt"):
+    sample_ids = [os.path.basename(f)[:-len(suffix)] for f in count_files]
     header = "mirna\t" + '\t'.join(sample_ids) + '\n'
     with open(table_file, 'w') as f:
         f.write(header)
@@ -812,6 +797,74 @@ def produce_mirna_counts_table(count_files, table_file):
     run_cmd("paste {inputs} | \
              cut -f1,$(echo `seq 2 2 {num}` | sed 's/ /,/g') \
              >> {table}".format(inputs=inputs, num=2*len(inputs), table=table_file), "", None)
+
+
+@transform(dedup_by_umi, suffix('.bam'), '.bam.bai')
+def index_deduped_bam(bam, _):
+    """ Index deduped bam """
+    index_bam(bam)
+
+@follows(index_deduped_bam)
+@transform(dedup_by_umi, suffix('.bam'), '.bam.mirbase_counts.txt')
+def count_mirbase_reads_including_multimapped(bam, counts_file):
+    """ Count all mirbase hits """
+    count_ref_hits(bam, counts_file)
+
+
+@merge(count_mirbase_reads_including_multimapped, os.path.join(runs_scratch_dir, "mirna_all_count_table.txt"))
+def produce_mirna_all_counts_table(count_files, table_file):
+    """ Join per sample count tables for all counts (including multimappers)"""
+    merge_count_tables(count_files, table_file, "dedup.bam.mirbase_counts.txt")
+
+
+# uniqly mapping
+
+@transform(dedup_by_umi, suffix('.bam'), '.filt.bam')
+def filter_multimapped(inbam, outbam):
+    ''' drop alternative alignments and MQ<5'''
+    
+    
+    # for bowtie2:
+    #  - tier1:
+    #    - alternative hits with lower score should be removed
+    #    - multimappers with equal score should be kept and counted downsteam
+    #  - tier2: 
+    #    - MQ>5 filter
+    
+    
+    # for BWA:
+    #  - tier1:
+    #    - equally good hits should be made into records and suboptimal hits discarded
+    #  - tier2: 
+    #    - MQ>1
+    
+    samtools_view_args = "view -q5 -F256 -Shb"  
+    run_cmd(samtools, samtools_view_args, None)
+
+@transform(filter_multimapped, suffix('.bam'), '.bam.bai')
+def index_deduped_filtered_bam(bam, _):
+    """ Index deduped bam """
+    index_bam(bam)
+
+
+@follows(index_deduped_filtered_bam)
+@transform(filter_multimapped, suffix('.bam'), '.bam.mirbase_counts.txt')
+def count_unique_mirbase_reads(bam, counts_file):
+    """ Count uniqly mapping mirbase hits """
+    count_ref_hits(bam, counts_file)
+
+
+@merge(count_unique_mirbase_reads, os.path.join(runs_scratch_dir, "mirna_unique_count_table.txt"))
+def produce_mirna_unique_counts_table(count_files, table_file):
+    """ Join per sample count tables for unique counts"""
+    merge_count_tables(count_files, table_file, "dedup.filt.bam.mirbase_counts.txt")
+    
+
+@follows(produce_mirna_unique_counts_table, produce_mirna_all_counts_table)
+def count_mirs():
+    pass
+
+# unmapped
 
 @transform(map_unmapped, suffix('.bam'), '.bam.bai')
 def index_genome_bam(bam, _):
@@ -850,7 +903,7 @@ def run_flagstat(bam):
             dockerize=dockerize)
 
 
-@transform(map_to_mirbase, suffix(".bam"), ".bam.flagstat")
+@transform(filter_multimapped, suffix(".bam"), ".bam.flagstat")
 def flagstat_mirbase_bam(bam, _):
     run_flagstat(bam)
     
@@ -938,7 +991,7 @@ def qc_mapping():
 
 
 #@posttask(cleanup_files)
-@follows(produce_mirna_counts_table, qc_mapping)
+@follows(produce_mirna_unique_counts_table, produce_mirna_all_counts_table, qc_mapping)
 def complete_run():
     pass
 
