@@ -389,12 +389,14 @@ def convert2primary(split_line):
     split_line[1] = str(int(split_line[1]) - 256)
     return '\t'.join(split_line)+'\n'
     
-def convert_secondary_to_primary(insam, outsam):
+def convert_secondary_to_primary(insam, outsam, query_ref_once=True):
     ''' Unsets SAM secondary alignment flag for alignments with score (AS) equal to the primary alignment.
-        Input sam must be read sorted, primary alignment for a read must preceed secondary alignment for this read  '''
+        Input sam must be read sorted, primary alignment for a read must preceed secondary alignment for this read.
+        If qury_ref_once is True, only one pair query-ref will be set as primary '''
 
     primary_score=0
     prev_read=None
+    refs=set()
     for rec in insam:
         recs = rec.strip().split('\t')
         if isHeader(rec) or not isMapped(recs):
@@ -402,16 +404,19 @@ def convert_secondary_to_primary(insam, outsam):
             continue
         
         read = getQuery(recs)
-        if read == prev_read and isSecondary(recs) and \
-           int(getTagValue('AS:i',recs)) >= primary_score:
-               
-            rec = convert2primary(recs)               
+        if read == prev_read \
+           and isSecondary(recs) \
+           and int(getTagValue('AS:i',recs)) >= primary_score \
+           and (not query_ref_once or getRef(recs) not in refs):
+            rec = convert2primary(recs)
+            refs.add(getRef(recs))
             
         elif read != prev_read:
             prev_read=read
             if isSecondary(recs):
                 raise Exception("Secondary alignment preceeds primary for read: %s" % read)
             primary_score = int(getTagValue('AS:i',recs))
+            refs=set()
 
         outsam.write(rec)
       
