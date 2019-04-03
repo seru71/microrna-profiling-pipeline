@@ -532,7 +532,7 @@ PRE_UMI_ADAPTER='AACTGTAGGCACCATCAAT'
 def extract_umi(input_fq, output_fq):
     """ Trim reads to the beginning of UMI adaper and extract UMI sequence to read identifier """ 
     
-    pattern = ".{15}.*(?P<discard_1>%s)(?P<umi_1>.{12})(?P<discard_2>.*)" % PRE_UMI_ADAPTER
+    pattern = ".{15}.*(?P<discard_1>%s){s<=2}(?P<umi_1>.{12})(?P<discard_2>.*)" % PRE_UMI_ADAPTER
     logfile = output_fq+'.log'
     
     args = "extract -I {infq} -S {outfq} -L {log} \
