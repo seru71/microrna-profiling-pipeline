@@ -341,6 +341,7 @@ if __name__ == '__main__':
     trimmomatic = config.get('Tools', 'trimmomatic') 
     bwa = config.get('Tools','bwa')
     bowtie2 = config.get('Tools','bowtie2')
+    star = config.get('Tools','star')
     samtools = config.get('Tools','samtools')
     umitools = config.get('Tools','umitools')
     picard = config.get('Tools','picard-tools')
@@ -671,17 +672,36 @@ def bowtie_map_and_sort_se(output_bam, ref_genome, fq1, read_group=None, threads
     rgs = read_group.split('\\t')
     rg_id = rgs[1]
     rg_fields = ' '.join(['--rg '+s for s in rgs[2:]])
-    bowtie2_args = '-L11 --norc -k10 \
-                   --rg-id {rg_id} {rg} \
-                   -x {ref} -U {fq}'.format(ref=ref_genome, fq=fq1,
+    # --score-min G,28,0
+    bowtie2_args = '-N1 -L9 --norc -k10 --local \
+                    --score-min L,4,1.3 --mp 4 \
+                    --rg-id {rg_id} {rg} \
+                    -x {ref} -U {fq}'.format(ref=ref_genome, fq=fq1,
                                             rg_id=rg_id, rg=rg_fields)
-    
+    convert_args = "-t convert-secondary"
     samtools_args = "sort -o {out} -".format(out=output_bam)
     
     run_piped_command(bowtie2, bowtie2_args, None,
+                      os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mirbase_prep.py {args}'), convert_args, None,
                       samtools, samtools_args, None)
     
     
+def star_map_and_sort_se(output_bam, ref_genome, fq, read_group=None, threads=1, 
+                         all_best_primary=False, keep_unmapped=True):
+                             
+    ref_dir = ref_genome+"_STAR"
+    star_args = "--genomeDir {ref} --readFilesIn {fq} --readFilesCommand zcat \
+                --outSAMtype BAM SortedByCoordinate --outStd BAM_SortedByCoordinate \
+                --outFileNamePrefix {bam} --outFilterMismatchNmax {nm} --outFilterScoreMin 14 \
+                ".format(ref=ref_dir, fq=fq, bam=output_bam, nm=1) 
+                                                   
+    if all_best_primary: star_args+=" --outSAMprimaryFlag AllBestScore"
+    if keep_unmapped: star_args += " --outSAMunmapped Within"
+    
+    samtools_args = 'view -hb -F16 -F256 > %s' % output_bam
+    
+    run_piped_command(star, star_args, None,
+                        samtools, samtools_args, None)
     
 
 def merge_bams(out_bam, *in_bams):
@@ -695,7 +715,7 @@ def merge_bams(out_bam, *in_bams):
 	run_cmd(samtools, args, dockerize=dockerize, cpus=threads, mem_per_cpu=int(mem/threads))
 	
 	
-def map_reads(fastq_list, ref_genome, output_bam, read_groups=None, mapper='bwa'):
+def map_reads(fastq_list, ref_genome, output_bam, read_groups=None, mapper='bwa', **args):
 
     # If no read groups is provided, we could make up default ones based on fq filenames.
     if read_groups==None:
@@ -708,13 +728,15 @@ def map_reads(fastq_list, ref_genome, output_bam, read_groups=None, mapper='bwa'
             if mapper == 'bwa':
                 bwa_map_and_sort_pe(tmp_bams[i], ref_genome, fastq_list[i][0], fastq_list[i][1], read_groups[i])
             else:
-                raise Exception('Bowtie2 PE mapping is not implemented')
+                raise Exception('Bowtie2/STAR PE mapping is not implemented')
         else:
             if mapper == 'bwa':
                 bwa_map_and_sort_se(tmp_bams[i], ref_genome, fastq_list[i], read_group=read_groups[i])   
-            else:
+            elif mapper == 'bowtie':
                 bowtie_map_and_sort_se(tmp_bams[i], ref_genome, fastq_list[i], read_group=read_groups[i])   
-
+            else:
+               star_map_and_sort_se(tmp_bams[i], ref_genome, fastq_list[i], read_group=read_groups[i], **args)
+                
     merge_bams(output_bam, *tmp_bams)
     
     for f in tmp_bams:
@@ -723,14 +745,14 @@ def map_reads(fastq_list, ref_genome, output_bam, read_groups=None, mapper='bwa'
 
 @collate(trim_reads, 
             formatter("(.+)/(?P<SAMPLE_ID>[^/]+)_L\d\d\d\.fq\.gz$"), 
-            "{subpath[0][0]}/{subdir[0][0]}.bam",
+            "{subpath[0][0]}/{subdir[0][0]}.bowtie.bam",
             "{SAMPLE_ID[0]}")
 def map_to_mirbase(fastqs, bam_file, sample_id):
     """ Maps trimmed reads from all lanes """
     read_groups = ['@RG\\tID:{rgid}\\tSM:{lb}\\tLB:{lb}'\
 			.format(rgid=sample_id+"_"+lane_id, lb=sample_id) for lane_id in ['L001', 'L002', 'L003', 'L004']]
-    map_reads(fastqs, mirbase_reference, bam_file, read_groups, mapper='bowtie2')    
-    
+    map_reads(fastqs, mirbase_reference, bam_file, read_groups, mapper='bowtie')    
+
     
 @transform(map_to_mirbase, suffix('.bam'), '.unmapped.fq.gz')
 def extract_unmapped(bam, fastq):
@@ -767,12 +789,8 @@ def dedup_by_umi(input_bam, dedupped_bam, logfile):
     """ Dedup reads with the same mapping start and UMI """
     args = "dedup -I {inbam} -S {outbam} -L {log} \
             --method unique \
-	   ".format(inbam=input_bam, outbam=dedupped_bam, log=logfile)
-       
-    # --mapping-quality=5 \
-
+	       ".format(inbam=input_bam, outbam=dedupped_bam, log=logfile)
     run_cmd(umitools, args, dockerize=dockerize)
-
 
 
 
@@ -781,6 +799,43 @@ def dedup_by_umi(input_bam, dedupped_bam, logfile):
     #        C o u n t i n g
     #
     #88888888888888888888888888888888888888888888
+    
+'''
+    
+    BWA aln: 
+     - does not allow single-strand mapping
+     - keeps alternative hits, also with equal score in XA tag, not as separate records
+     - does not soft-clip outside of the reference (reference sequences need to be padded)
+      
+     Cannot be used because
+     - due to (1) cannot map directional reads
+     - due to (2) cannot filter on rc-strand flag because that can lead to removing equally scoring fwd-strand hit in XA-tag
+     - filtering of SAM would be necessary to extract the correctly mapping reads, but XA tag does not contain alignment score and selecting best scoring alignments would be probelematic
+    
+    Bowtie2:
+     + allows for one-strand mapping (--norc flag)
+     + keeps alternative hits in separate records
+     - only one hit gets primary flag, all alternatives (incl. best scoring) get supplementary hit flag
+     + soft-clipping in --local mode
+     
+     Uniqly mapping reads can be counted without problems:
+      - get multimapping output and filter MQ>5
+     Best mapping multimappers require SAM parsing and modifying mapping flag prior to filtering and counting:
+      - get multimapping output and swap 256 flag for the lines where alignment score (AS) is equal to the primary alignment AS
+      - filter on supplementary alignment flag (256)
+    
+    STAR:
+     - does not allow for one-strand mapping
+     + keeps alternative hits in separate records, allowing to compensate for (1) with flag-filtering reverse mappers
+     + all best hits can get primary flag, lower scoring hits get supplementary alignment flag
+     + allows soft-clipping, but does not allow tuning of the soft-clipping extent
+     
+     Uniqly mapping fwd-reads cannot be easily filtered becasue MQ and NH tag (number of hits) are calculated based on all mapped reads (including reverse strand) 
+     Best mapping multimappers can be counted without problems.
+    
+    
+    
+'''
 
 
 def count_ref_hits(bam, counts_file):
@@ -799,6 +854,48 @@ def merge_count_tables(count_files, table_file, suffix=".dedup.filt.bam.mirbase_
              >> {table}".format(inputs=inputs, num=2*len(inputs), table=table_file), "", None)
 
 
+def filter_alignments(inbam, outbam, filters):
+    samtools_view_args = "view {filt} -hb {bam} > {out}\
+                         ".format(filt=filters, bam=inbam, out=outbam)
+    run_cmd(samtools, samtools_view_args, None)
+
+
+#
+# count uniqly mapping (works well only with bowtie2)
+
+@transform(dedup_by_umi, suffix('.bam'), '.uniq.bam')
+def filter_deduped_bam(inbam, outbam):
+    ''' drop multimapping alignments '''
+    # bowtie2 --norc presets
+    filter_alignments(inbam, outbam, "-q5 -F256")
+    
+    # STAR presets - reverse-complement and suboptimal mappings are removed in the mapping step
+    # WARNING: -q4 can remove reads mapping uniqly to forward-strand, because STAR maps to both 
+    #          strands and sets low MQ if a read maps in more than 1 location. There are several 
+    #          reverse complement miRs which will be affected by this
+    #filter_alignments(inbam, outbam, "-q4")
+
+@transform(filter_deduped_bam, suffix('.bam'), '.bam.bai')
+def index_deduped_filtered_bam(bam, _):
+    """ Index deduped bam """
+    index_bam(bam)
+
+@follows(index_deduped_filtered_bam)
+@transform(filter_deduped_bam, suffix('.bam'), '.bam.mirbase_counts.txt')
+def count_unique_mirbase_reads(bam, counts_file):
+    """ Count uniqly mapping mirbase hits """
+    count_ref_hits(bam, counts_file)
+
+@merge(count_unique_mirbase_reads, os.path.join(runs_scratch_dir, "mirna_unique_count_table.txt"))
+def produce_mirna_unique_counts_table(count_files, table_file):
+    """ Join per sample count tables for unique counts"""
+    merge_count_tables(count_files, table_file, ".dedup.uniq.bam.mirbase_counts.txt")
+
+
+#
+# count all best scoring hits (includes best scoring multimappers)
+# STAR could be used if mapping was done with flag editing (secondary&best_score -> primary)
+
 @transform(dedup_by_umi, suffix('.bam'), '.bam.bai')
 def index_deduped_bam(bam, _):
     """ Index deduped bam """
@@ -806,64 +903,22 @@ def index_deduped_bam(bam, _):
 
 @follows(index_deduped_bam)
 @transform(dedup_by_umi, suffix('.bam'), '.bam.mirbase_counts.txt')
-def count_mirbase_reads_including_multimapped(bam, counts_file):
-    """ Count all mirbase hits """
+def count_allbest_mirbase_reads(bam, counts_file):
+    """ Count mirbase hits including equally good multimappers"""
     count_ref_hits(bam, counts_file)
 
-
-@merge(count_mirbase_reads_including_multimapped, os.path.join(runs_scratch_dir, "mirna_all_count_table.txt"))
-def produce_mirna_all_counts_table(count_files, table_file):
-    """ Join per sample count tables for all counts (including multimappers)"""
-    merge_count_tables(count_files, table_file, "dedup.bam.mirbase_counts.txt")
-
-
-# uniqly mapping
-
-@transform(dedup_by_umi, suffix('.bam'), '.filt.bam')
-def filter_multimapped(inbam, outbam):
-    ''' drop alternative alignments and MQ<5'''
-    
-    
-    # for bowtie2:
-    #  - tier1:
-    #    - alternative hits with lower score should be removed
-    #    - multimappers with equal score should be kept and counted downsteam
-    #  - tier2: 
-    #    - MQ>5 filter
-    
-    
-    # for BWA:
-    #  - tier1:
-    #    - equally good hits should be made into records and suboptimal hits discarded
-    #  - tier2: 
-    #    - MQ>1
-    
-    samtools_view_args = "view -q5 -F256 -Shb %s > %s" % (inbam, outbam)
-    run_cmd(samtools, samtools_view_args, None)
-
-@transform(filter_multimapped, suffix('.bam'), '.bam.bai')
-def index_deduped_filtered_bam(bam, _):
-    """ Index deduped bam """
-    index_bam(bam)
+@merge(count_allbest_mirbase_reads, os.path.join(runs_scratch_dir, "mirna_allbest_count_table.txt"))
+def produce_mirna_allbest_counts_table(count_files, table_file):
+    """ Join per sample count tables for alignments including equally good multimappers"""
+    merge_count_tables(count_files, table_file, ".dedup.bam.mirbase_counts.txt")
 
 
-@follows(index_deduped_filtered_bam)
-@transform(filter_multimapped, suffix('.bam'), '.bam.mirbase_counts.txt')
-def count_unique_mirbase_reads(bam, counts_file):
-    """ Count uniqly mapping mirbase hits """
-    count_ref_hits(bam, counts_file)
-
-
-@merge(count_unique_mirbase_reads, os.path.join(runs_scratch_dir, "mirna_unique_count_table.txt"))
-def produce_mirna_unique_counts_table(count_files, table_file):
-    """ Join per sample count tables for unique counts"""
-    merge_count_tables(count_files, table_file, "dedup.filt.bam.mirbase_counts.txt")
-    
-
-@follows(produce_mirna_unique_counts_table, produce_mirna_all_counts_table)
+@follows(produce_mirna_unique_counts_table, produce_mirna_allbest_counts_table)
 def count_mirs():
     pass
 
+
+#
 # unmapped
 
 @transform(map_unmapped, suffix('.bam'), '.bam.bai')
@@ -903,7 +958,7 @@ def run_flagstat(bam):
             dockerize=dockerize)
 
 
-@transform(filter_multimapped, suffix(".bam"), ".bam.flagstat")
+@transform(filter_deduped_bam, suffix(".bam"), ".bam.flagstat")
 def flagstat_mirbase_bam(bam, _):
     run_flagstat(bam)
     
@@ -991,7 +1046,7 @@ def qc_mapping():
 
 
 #@posttask(cleanup_files)
-@follows(produce_mirna_unique_counts_table, produce_mirna_all_counts_table, qc_mapping)
+@follows(count_mirs, qc_mapping)
 def complete_run():
     pass
 
