@@ -957,17 +957,20 @@ def run_flagstat(bam):
             "flagstat {} > {} ".format(bam, bam+'.flagstat'), 
             dockerize=dockerize)
 
+@transform(map_to_mirbase, suffix(".bam"), ".bam.flagstat")
+def flagstat_mirbase_bam(bam, _):
+    run_flagstat(bam)
+    
+@transform(dedup_by_umi, suffix(".bam"), ".bam.flagstat")
+def flagstat_deduped_allbest_bam(bam, _):
+    run_flagstat(bam)
 
 @transform(filter_deduped_bam, suffix(".bam"), ".bam.flagstat")
-def flagstat_mirbase_bam(bam, _):
+def flagstat_deduped_unique_bam(bam, _):
     run_flagstat(bam)
     
 @transform(map_unmapped, suffix(".bam"), ".bam.flagstat")
 def flagstat_unmapped_bam(bam, _):
-    run_flagstat(bam)
-    
-@transform(dedup_by_umi, suffix(".bam"), ".bam.flagstat")
-def flagstat_deduped_bam(bam, _):
     run_flagstat(bam)
 
     
@@ -992,6 +995,17 @@ def aggregate_mirbase_mapping_stats(flagstats, out_table):
         out.write(get_total_and_mapped_from_flagstats(flagstats, 
                                                       header_list=['sample','mirbase_total','mirbase_mapped']))
 
+@merge(flagstat_deduped_allbest_bam, os.path.join(runs_scratch_dir, "qc", "deduped_allbest_mapping_stats.tsv"))
+def aggregate_deduped_allbest_mapping_stats(flagstats, out_table):
+     with open(out_table,"wt") as out:
+        out.write(get_total_and_mapped_from_flagstats(flagstats, file_suffix='.dedup.bam.flagstat',
+                                                      header_list=['sample','allbest_total','allbest_mapped']))
+
+@merge(flagstat_deduped_unique_bam, os.path.join(runs_scratch_dir, "qc", "deduped_uniq_mapping_stats.tsv"))
+def aggregate_deduped_unique_mapping_stats(flagstats, out_table):
+     with open(out_table,"wt") as out:
+        out.write(get_total_and_mapped_from_flagstats(flagstats, file_suffix='.dedup.bam.flagstat',
+                                                      header_list=['sample','unique_total','unique_mapped']))
 
 @merge(flagstat_unmapped_bam, os.path.join(runs_scratch_dir, "qc", "unmapped_mapping_stats.tsv"))
 def aggregate_unmapped_mapping_stats(flagstats, out_table):
@@ -999,11 +1013,6 @@ def aggregate_unmapped_mapping_stats(flagstats, out_table):
         out.write(get_total_and_mapped_from_flagstats(flagstats, file_suffix='.unmapped.bam.flagstat',
                                                       header_list=['sample','unmapped_total','unmapped_mapped']))
 
-@merge(flagstat_deduped_bam, os.path.join(runs_scratch_dir, "qc", "deduped_mapping_stats.tsv"))
-def aggregate_deduped_mapping_stats(flagstats, out_table):
-     with open(out_table,"wt") as out:
-        out.write(get_total_and_mapped_from_flagstats(flagstats, file_suffix='.dedup.bam.flagstat',
-                                                      header_list=['sample','deduped_total','deduped_mapped']))
 
 
 @merge(count_unmapped_reads_by_category, os.path.join(runs_scratch_dir, "qc", "unmapped_biofeature_stats.tsv"))
@@ -1026,16 +1035,16 @@ def aggregate_unmapped_biofeatures(input_files, out_table):
 
 
 @transform(aggregate_mirbase_mapping_stats, formatter(), 
-          add_inputs(aggregate_deduped_mapping_stats, aggregate_unmapped_mapping_stats, aggregate_unmapped_biofeatures), 
+          add_inputs(aggregate_deduped_allbest_mapping_stats, aggregate_deduped_unique_mapping_stats, aggregate_unmapped_mapping_stats, aggregate_unmapped_biofeatures), 
           os.path.join(runs_scratch_dir, "qc", "mapping_stats.tsv"))
 def join_mapping_stats(input_stats, out_stats):
     
-    mirbase_stats, dedup_stats, unmapped_stats, bf_stats = input_stats[0], input_stats[1], input_stats[2], input_stats[3]
+    mirbase_stats, allbest_stats, unique_stats, unmapped_stats, bf_stats = input_stats[0], input_stats[1], input_stats[2], input_stats[3], input_stats[4]
     
     # drop sample id from all except mirbase_stats
     # drop dedup_mapped because it is equal to dedup_total
-    args = '{} {} {} {} | cut -f 1-3,5,8-9,11- > {}\
-           '.format(mirbase_stats, dedup_stats, unmapped_stats, bf_stats, out_stats)
+    args = '{} {} {} {} {} | cut -f 1-3,5,8,11-12,14- > {}\
+           '.format(mirbase_stats, allbest_stats, unique_stats, unmapped_stats, bf_stats, out_stats)
     run_cmd('paste {args}', args, dockerize=dockerize)
 
 
