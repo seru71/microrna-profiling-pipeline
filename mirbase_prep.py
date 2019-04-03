@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 
 import re
 import sys
@@ -98,7 +99,11 @@ def hasExtraTags(split_line):
     return len(split_line)>11
     
 def getTagValue(tag, split_line):
-    return [e for e in split_line[11:] if e.startswith(tag)][0][len(tag+":"):]
+    if len(split_line)>11: 
+        tags = [e for e in split_line[11:] if e.startswith(tag)]
+        if len(tags)>0:
+            return tags[0][len(tag+":"):]
+    return None
     
 def isHeader(line):
     return line[0] == "@"
@@ -370,6 +375,47 @@ def print_clustered(mapping_file_handle, output, reference_fasta_file, **other_a
         output.write("+++++++++++\n\n")
 
 
+#
+#  convert secondary with equal score to primary
+#
+
+def isSecondary(split_line):
+    return bool((getFlag(split_line) >> 8) & 1)
+
+def isMapped(split_line):
+    return not bool((getFlag(split_line) >> 2) & 1)
+
+def convert2primary(split_line):
+    split_line[1] = str(int(split_line[1]) - 256)
+    return '\t'.join(split_line)+'\n'
+    
+def convert_secondary_to_primary(insam, outsam):
+    ''' Unsets SAM secondary alignment flag for alignments with score (AS) equal to the primary alignment.
+        Input sam must be read sorted, primary alignment for a read must preceed secondary alignment for this read  '''
+
+    primary_score=0
+    prev_read=None
+    for rec in insam:
+        recs = rec.strip().split('\t')
+        if isHeader(rec) or not isMapped(recs):
+            outsam.write(rec)
+            continue
+        
+        read = getQuery(recs)
+        if read == prev_read and isSecondary(recs) and \
+           int(getTagValue('AS:i',recs)) >= primary_score:
+               
+            rec = convert2primary(recs)               
+            
+        elif read != prev_read:
+            prev_read=read
+            if isSecondary(recs):
+                raise Exception("Secondary alignment preceeds primary for read: %s" % read)
+            primary_score = int(getTagValue('AS:i',recs))
+
+        outsam.write(rec)
+      
+        
 
 #
 # ------------------------------------------------------------------#
@@ -390,6 +436,8 @@ def perform_task(task, input_file_handle, args):
     elif task == 'collapse-multimapers':
         #print_clustered(input_file_handle, sys.stdout, str(args.reference_fasta))
         cluster_multimappers(input_file_handle, sys.stdout, str(args.reference_fasta))
+    elif task == 'convert-secondary':
+        convert_secondary_to_primary(input_file_handle, sys.stdout)
 
 """
 Workflow:
@@ -415,7 +463,7 @@ bowtie2-build mature.hsa.multcollapsed.fa mature.hsa.multcollapsed.fa
 if __name__ == '__main__':
     
     from optparse import OptionParser
-    parser = OptionParser(version="%prog 1.0", usage = "\n\n %prog [extract-hsa|collapse-identical|pad|fasta2fastq|collapse-multimapers] input_file")
+    parser = OptionParser(version="%prog 1.0", usage = "\n\n %prog [extract-hsa|collapse-identical|pad|fasta2fastq|collapse-multimapers|convert-secondary] input_file")
     parser.add_option("--task",            "-t", type='string', action="store", dest="task",            help="Task to perform")
     parser.add_option("--input_file",      "-i", type='string', action="store", dest="input_file",      help="Input file for the task [stdin]")
     parser.add_option("--reference_fasta", "-r", type='string', action="store", dest="reference_fasta", help="Reference file for the task. Required for tasks: cluster")
@@ -424,7 +472,7 @@ if __name__ == '__main__':
     parser.add_option("--padding_nucleotide", "--pn",   type='string', action="store", dest="padding_char",    default='N', help="Padding nucleotide character [N]. Required for tasks: pad")
     (args, _) = parser.parse_args()
     
-    implemented_tasks = ['extract-hsa','collapse-identical', 'pad', 'fasta2fastq', 'collapse-multimapers']
+    implemented_tasks = ['extract-hsa','collapse-identical', 'pad', 'fasta2fastq', 'collapse-multimapers', 'convert-secondary']
     if args.task not in implemented_tasks:
         parser.print_help()
         sys.exit(1)
