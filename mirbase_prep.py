@@ -416,7 +416,7 @@ def convert_secondary_to_primary(insam, outsam, query_ref_once=True):
             if isSecondary(recs):
                 raise Exception("Secondary alignment preceeds primary for read: %s" % read)
             primary_score = int(getTagValue('AS:i',recs))
-            refs=set()
+            refs=set([getRef(recs)])
 
         outsam.write(rec)
       
