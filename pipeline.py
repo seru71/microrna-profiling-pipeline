@@ -717,7 +717,7 @@ def merge_bams(out_bam, *in_bams):
 	run_cmd(samtools, args, dockerize=dockerize, cpus=threads, mem_per_cpu=int(mem/threads))
 	
 	
-def map_reads(fastq_list, ref_genome, output_bam, read_groups=None, mapper='bwa', **args):
+def map_reads(fastq_list, ref_genome, output_bam, read_groups=None, mapper='bowtie', **args):
 
     # If no read groups is provided, we could make up default ones based on fq filenames.
     if read_groups==None:
@@ -866,7 +866,7 @@ def filter_alignments(inbam, outbam, filters):
 # count uniqly mapping (works well only with bowtie2)
 
 @transform(dedup_by_umi, suffix('.bam'), '.uniq.bam')
-def filter_deduped_bam(inbam, outbam):
+def filter_unique(inbam, outbam):
     ''' drop multimapping alignments '''
     # bowtie2 --norc presets
     filter_alignments(inbam, outbam, "-q10")
@@ -877,13 +877,13 @@ def filter_deduped_bam(inbam, outbam):
     #          reverse complement miRs which will be affected by this
     #filter_alignments(inbam, outbam, "-q4")
 
-@transform(filter_deduped_bam, suffix('.bam'), '.bam.bai')
-def index_deduped_filtered_bam(bam, _):
+@transform(filter_unique, suffix('.bam'), '.bam.bai')
+def index_deduped_uniq_bam(bam, _):
     """ Index deduped bam """
     index_bam(bam)
 
-@follows(index_deduped_filtered_bam)
-@transform(filter_deduped_bam, suffix('.bam'), '.bam.mirbase_counts.txt')
+@follows(index_deduped_uniq_bam)
+@transform(filter_unique, suffix('.bam'), '.bam.mirbase_counts.txt')
 def count_unique_mirbase_reads(bam, counts_file):
     """ Count uniqly mapping mirbase hits """
     count_ref_hits(bam, counts_file)
@@ -892,6 +892,38 @@ def count_unique_mirbase_reads(bam, counts_file):
 def produce_mirna_unique_counts_table(count_files, table_file):
     """ Join per sample count tables for unique counts"""
     merge_count_tables(count_files, table_file, ".dedup.uniq.bam.mirbase_counts.txt")
+
+
+#
+# count multimappers once
+# (removes seconds and subsequent best scoring alignments for each read)
+#
+
+@transform(dedup_by_umi, suffix('.bam'), '.single.bam')
+def filter_single(inbam, outbam):
+    ''' drop second and subsequent alignments of each read'''
+    
+    mirbase_prep=os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mirbase_prep.py {args}')
+    run_piped_command(samtools, "view -h %s" % inbam, None,
+                      mirbase_prep, "-t drop-multi", None,  
+                      samtools, "view -hSb > %s" % outbam, None)
+
+@transform(filter_single, suffix('.bam'), '.bam.bai')
+def index_single_bam(bam, _):
+    """ Index deduped bam """
+    index_bam(bam)
+
+@follows(index_single_bam)
+@transform(filter_single, suffix('.bam'), '.bam.mirbase_counts.txt')
+def count_single_mirbase_reads(bam, counts_file):
+    """ Count uniqly mapping mirbase hits """
+    count_ref_hits(bam, counts_file)
+
+@merge(count_single_mirbase_reads, os.path.join(runs_scratch_dir, "mirna_single_count_table.txt"))
+def produce_mirna_single_counts_table(count_files, table_file):
+    """ Join per sample count tables for unique counts"""
+    merge_count_tables(count_files, table_file, ".dedup.single.bam.mirbase_counts.txt")
+
 
 
 #
@@ -915,7 +947,7 @@ def produce_mirna_allbest_counts_table(count_files, table_file):
     merge_count_tables(count_files, table_file, ".dedup.bam.mirbase_counts.txt")
 
 
-@follows(produce_mirna_unique_counts_table, produce_mirna_allbest_counts_table)
+@follows(produce_mirna_unique_counts_table, produce_mirna_single_counts_table, produce_mirna_allbest_counts_table)
 def count_mirs():
     pass
 
@@ -967,7 +999,7 @@ def flagstat_mirbase_bam(bam, _):
 def flagstat_deduped_allbest_bam(bam, _):
     run_flagstat(bam)
 
-@transform(filter_deduped_bam, suffix(".bam"), ".bam.flagstat")
+@transform(filter_unique, suffix(".bam"), ".bam.flagstat")
 def flagstat_deduped_unique_bam(bam, _):
     run_flagstat(bam)
     
@@ -1032,10 +1064,14 @@ def mapstat_mirbase_bam(bam, _):
 def mapstat_deduped_allbest_bam(bam, _):
     run_mapstat(bam)
 
-@transform(filter_deduped_bam, suffix(".bam"), ".bam.mapstat")
+@transform(filter_unique, suffix(".bam"), ".bam.mapstat")
 def mapstat_deduped_unique_bam(bam, _):
     run_mapstat(bam)
     
+@transform(filter_single, suffix(".bam"), ".bam.mapstat")
+def mapstat_deduped_single_bam(bam, _):
+    run_mapstat(bam)
+
 @transform(map_unmapped, suffix(".bam"), ".bam.mapstat")
 def mapstat_unmapped_bam(bam, _):
     run_mapstat(bam)    
@@ -1067,6 +1103,10 @@ def aggregate_deduped_unique_mapping_stats(mapstats, out_table):
     get_total_and_mapped_from_mapstats(mapstats, out_table, file_suffix='.dedup.uniq.bam.mapstat',
                                                       header_list=['sample','unique_total','unique_mapped'])
 
+@merge(mapstat_deduped_single_bam, os.path.join(runs_scratch_dir, "qc", "deduped_single_mapping_stats.tsv"))
+def aggregate_deduped_single_mapping_stats(mapstats, out_table):
+    get_total_and_mapped_from_mapstats(mapstats, out_table, file_suffix='.dedup.single.bam.mapstat',
+                                                      header_list=['sample','single_total','single_mapped'])
 
 
 
@@ -1095,15 +1135,16 @@ def aggregate_unmapped_biofeatures(input_files, out_table):
 
 
 @transform(aggregate_mirbase_mapping_stats, formatter(), 
-          add_inputs(aggregate_deduped_allbest_mapping_stats, aggregate_deduped_unique_mapping_stats, aggregate_unmapped_mapping_stats, aggregate_unmapped_biofeatures), 
+          add_inputs(aggregate_deduped_allbest_mapping_stats, aggregate_deduped_unique_mapping_stats, aggregate_deduped_single_mapping_stats, aggregate_unmapped_mapping_stats, aggregate_unmapped_biofeatures), 
           os.path.join(runs_scratch_dir, "qc", "mapping_stats.tsv"))
 def join_mapping_stats(input_stats, out_stats):
     
-    mirbase_stats, allbest_stats, unique_stats, unmapped_stats, bf_stats = input_stats[0], input_stats[1], input_stats[2], input_stats[3], input_stats[4]
+    mirbase_stats, allbest_stats, unique_stats, single_stats, unmapped_stats, bf_stats = \
+        input_stats[0], input_stats[1], input_stats[2], input_stats[3], input_stats[4], input_stats[5]
     
     # drop sample id from all except mirbase_stats
     # drop dedup_mapped because it is equal to dedup_total
-    args = '{} {} {} {} {} | cut -f 1-3,5,8,11-12,14- > {}\
+    args = '{} {} {} {} {} {} | cut -f 1-3,5,8,11,14-15,17- > {}\
            '.format(mirbase_stats, allbest_stats, unique_stats, unmapped_stats, bf_stats, out_stats)
     run_cmd('paste {args}', args, dockerize=dockerize)
 
