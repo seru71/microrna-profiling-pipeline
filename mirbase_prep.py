@@ -421,6 +421,24 @@ def convert_secondary_to_primary(insam, outsam, query_ref_once=True):
         outsam.write(rec)
       
         
+#
+# drop multioccuring reads
+#
+
+def drop_second_alignment(insam, outsam):
+    ''' Drop seconds and all next alignments of a read'''
+    reads=set()
+    for rec in insam:
+        if isHeader(rec):
+            outsam.write(rec)
+            continue
+        
+        read = getQuery(rec.strip().split('\t'))
+        if read not in reads:
+            reads.add(read)
+            outsam.write(rec)
+    
+
 
 #
 # ------------------------------------------------------------------#
@@ -443,6 +461,8 @@ def perform_task(task, input_file_handle, args):
         cluster_multimappers(input_file_handle, sys.stdout, str(args.reference_fasta))
     elif task == 'convert-secondary':
         convert_secondary_to_primary(input_file_handle, sys.stdout)
+    elif task == 'drop-multi':
+        drop_second_alignment(input_file_handle, sys.stdout)
 
 """
 Workflow:
@@ -468,7 +488,7 @@ bowtie2-build mature.hsa.multcollapsed.fa mature.hsa.multcollapsed.fa
 if __name__ == '__main__':
     
     from optparse import OptionParser
-    parser = OptionParser(version="%prog 1.0", usage = "\n\n %prog [extract-hsa|collapse-identical|pad|fasta2fastq|collapse-multimapers|convert-secondary] input_file")
+    parser = OptionParser(version="%prog 1.0", usage = "\n\n %prog [extract-hsa|collapse-identical|pad|fasta2fastq|collapse-multimapers|convert-secondary|drop-multi] input_file")
     parser.add_option("--task",            "-t", type='string', action="store", dest="task",            help="Task to perform")
     parser.add_option("--input_file",      "-i", type='string', action="store", dest="input_file",      help="Input file for the task [stdin]")
     parser.add_option("--reference_fasta", "-r", type='string', action="store", dest="reference_fasta", help="Reference file for the task. Required for tasks: cluster")
@@ -477,7 +497,7 @@ if __name__ == '__main__':
     parser.add_option("--padding_nucleotide", "--pn",   type='string', action="store", dest="padding_char",    default='N', help="Padding nucleotide character [N]. Required for tasks: pad")
     (args, _) = parser.parse_args()
     
-    implemented_tasks = ['extract-hsa','collapse-identical', 'pad', 'fasta2fastq', 'collapse-multimapers', 'convert-secondary']
+    implemented_tasks = ['extract-hsa','collapse-identical', 'pad', 'fasta2fastq', 'collapse-multimapers', 'convert-secondary','drop-multi']
     if args.task not in implemented_tasks:
         parser.print_help()
         sys.exit(1)
