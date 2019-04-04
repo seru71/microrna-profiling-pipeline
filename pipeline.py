@@ -1018,9 +1018,9 @@ def aggregate_unmapped_mapping_stats(flagstats, out_table):
 #
 
     
-def get_mapstats(bam):
-    run_command(samtools, "view {} | cut -f1 | sort | uniq | wc -l > {} ".format(bam, bam+'.mapstat'), dockerize=dockerize)
-    run_command(samtools, "view -F4 {} | cut -f1 | sort | uniq | wc -l >> {} ".format(bam, bam+'.mapstat'), dockerize=dockerize)
+def run_mapstat(bam):
+    run_cmd(samtools, "view {} | cut -f1 | sort | uniq | wc -l > {} ".format(bam, bam+'.mapstat'), dockerize=dockerize)
+    run_cmd(samtools, "view -F4 {} | cut -f1 | sort | uniq | wc -l >> {} ".format(bam, bam+'.mapstat'), dockerize=dockerize)
 
 @transform(map_to_mirbase, suffix(".bam"), ".bam.mapstat")
 def mapstat_mirbase_bam(bam, _):
@@ -1039,10 +1039,10 @@ def mapstat_unmapped_bam(bam, _):
     run_mapstat(bam)    
     
 
-def get_total_and_mapped_from_mapstats(mapstat_files, file_suffix='.bam,mapstat', header_list=['sample','total','mapped']):
+def get_total_and_mapped_from_mapstats(mapstat_files, output_table, file_suffix='.bam.mapstat', header_list=['sample','total','mapped']):
     tmp_file = "/tmp/smpls"
     with open(tmp_file, 'w') as f:
-        f.write("\n".join([fname[:-len(suffix)] for fname in mapstat_files]))
+        f.write("\n".join([os.path.basename(fname)[:-len(file_suffix)] for fname in mapstat_files]))
     
     run_cmd("echo {args}", "%s > %s" % (" ".join(header_list), output_table), dockerize=dockerize)
     run_cmd("paste {args}","%s >> %s" % (" ".join([tmp_file]+mapstat_files), output_table))
