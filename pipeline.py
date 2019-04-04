@@ -679,11 +679,13 @@ def bowtie_map_and_sort_se(output_bam, ref_genome, fq1, read_group=None, threads
                     -x {ref} -U {fq}'.format(ref=ref_genome, fq=fq1,
                                             rg_id=rg_id, rg=rg_fields)
     convert_args = "-t convert-secondary"
-    samtools_args = "sort -o {out} -".format(out=output_bam)
+    samtools_args = "view -h -F256"
+    sort_args = "sort -o {out} -".format(out=output_bam)
     
     run_piped_command(bowtie2, bowtie2_args, None,
                       os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mirbase_prep.py {args}'), convert_args, None,
-                      samtools, samtools_args, None)
+                      samtools, samtools_args, None,
+                      samtools, sort_args, None)
     
     
 def star_map_and_sort_se(output_bam, ref_genome, fq, read_group=None, threads=1, 
@@ -867,7 +869,7 @@ def filter_alignments(inbam, outbam, filters):
 def filter_deduped_bam(inbam, outbam):
     ''' drop multimapping alignments '''
     # bowtie2 --norc presets
-    filter_alignments(inbam, outbam, "-q5 -F256")
+    filter_alignments(inbam, outbam, "-q5")
     
     # STAR presets - reverse-complement and suboptimal mappings are removed in the mapping step
     # WARNING: -q4 can remove reads mapping uniqly to forward-strand, because STAR maps to both 
@@ -1042,10 +1044,13 @@ def mapstat_unmapped_bam(bam, _):
 def get_total_and_mapped_from_mapstats(mapstat_files, output_table, file_suffix='.bam.mapstat', header_list=['sample','total','mapped']):
     tmp_file = "/tmp/smpls"
     with open(tmp_file, 'w') as f:
-        f.write("\n".join([os.path.basename(fname)[:-len(file_suffix)] for fname in mapstat_files]))
-    
-    run_cmd("echo {args}", "%s > %s" % (" ".join(header_list), output_table), dockerize=dockerize)
-    run_cmd("paste {args}","%s >> %s" % (" ".join([tmp_file]+mapstat_files), output_table))
+        f.write("\n".join(header_list[1:]))
+
+    with open(output_table, 'w') as f:
+        f.write("\t".join([header_list[0]]+[os.path.basename(fname)[:-len(file_suffix)] for fname in mapstat_files]))
+        f.write("\n")
+
+    run_cmd("paste {args}","%s >> %s" % (" ".join([tmp_file]+mapstat_files), output_table), dockerize=dockerize)
 
 
 @merge(mapstat_mirbase_bam, os.path.join(runs_scratch_dir, "qc", "mirbase_mapping_stats.tsv"))
