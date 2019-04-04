@@ -869,7 +869,7 @@ def filter_alignments(inbam, outbam, filters):
 def filter_deduped_bam(inbam, outbam):
     ''' drop multimapping alignments '''
     # bowtie2 --norc presets
-    filter_alignments(inbam, outbam, "-q5")
+    filter_alignments(inbam, outbam, "-q10")
     
     # STAR presets - reverse-complement and suboptimal mappings are removed in the mapping step
     # WARNING: -q4 can remove reads mapping uniqly to forward-strand, because STAR maps to both 
