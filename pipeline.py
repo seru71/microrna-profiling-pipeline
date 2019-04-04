@@ -955,8 +955,8 @@ def count_unmapped_reads_by_category(bam, counts_file):
 def run_flagstat(bam):
     run_cmd(samtools, 
             "flagstat {} > {} ".format(bam, bam+'.flagstat'), 
-            dockerize=dockerize)
-
+            dockerize=dockerize)   
+    
 @transform(map_to_mirbase, suffix(".bam"), ".bam.flagstat")
 def flagstat_mirbase_bam(bam, _):
     run_flagstat(bam)
@@ -971,8 +971,7 @@ def flagstat_deduped_unique_bam(bam, _):
     
 @transform(map_unmapped, suffix(".bam"), ".bam.flagstat")
 def flagstat_unmapped_bam(bam, _):
-    run_flagstat(bam)
-
+    run_flagstat(bam)    
     
 def list_to_tsv_line(l):
     return('\t'.join(l) + '\n')
@@ -988,7 +987,7 @@ def get_total_and_mapped_from_flagstats(flagstat_files, file_suffix='.bam.flagst
             out += list_to_tsv_line([sample_id, total, mapped])
     return out
     
-
+'''
 @merge(flagstat_mirbase_bam, os.path.join(runs_scratch_dir, "qc", "mirbase_mapping_stats.tsv"))
 def aggregate_mirbase_mapping_stats(flagstats, out_table):
     with open(out_table,"wt") as out:
@@ -1004,14 +1003,70 @@ def aggregate_deduped_allbest_mapping_stats(flagstats, out_table):
 @merge(flagstat_deduped_unique_bam, os.path.join(runs_scratch_dir, "qc", "deduped_uniq_mapping_stats.tsv"))
 def aggregate_deduped_unique_mapping_stats(flagstats, out_table):
      with open(out_table,"wt") as out:
-        out.write(get_total_and_mapped_from_flagstats(flagstats, file_suffix='.dedup.bam.flagstat',
+        out.write(get_total_and_mapped_from_flagstats(flagstats, file_suffix='.dedup.uniq.bam.flagstat',
                                                       header_list=['sample','unique_total','unique_mapped']))
-
+'''
 @merge(flagstat_unmapped_bam, os.path.join(runs_scratch_dir, "qc", "unmapped_mapping_stats.tsv"))
 def aggregate_unmapped_mapping_stats(flagstats, out_table):
      with open(out_table,"wt") as out:
         out.write(get_total_and_mapped_from_flagstats(flagstats, file_suffix='.unmapped.bam.flagstat',
                                                       header_list=['sample','unmapped_total','unmapped_mapped']))
+
+    
+#
+# mapstats
+#
+
+    
+def get_mapstats(bam):
+    run_command(samtools, "view {} | cut -f1 | sort | uniq | wc -l > {} ".format(bam, bam+'.mapstat'), dockerize=dockerize)
+    run_command(samtools, "view -F4 {} | cut -f1 | sort | uniq | wc -l >> {} ".format(bam, bam+'.mapstat'), dockerize=dockerize)
+
+@transform(map_to_mirbase, suffix(".bam"), ".bam.mapstat")
+def mapstat_mirbase_bam(bam, _):
+    run_mapstat(bam)
+    
+@transform(dedup_by_umi, suffix(".bam"), ".bam.mapstat")
+def mapstat_deduped_allbest_bam(bam, _):
+    run_mapstat(bam)
+
+@transform(filter_deduped_bam, suffix(".bam"), ".bam.mapstat")
+def mapstat_deduped_unique_bam(bam, _):
+    run_mapstat(bam)
+    
+@transform(map_unmapped, suffix(".bam"), ".bam.mapstat")
+def mapstat_unmapped_bam(bam, _):
+    run_mapstat(bam)    
+    
+
+def get_total_and_mapped_from_mapstats(mapstat_files, file_suffix='.bam,mapstat', header_list=['sample','total','mapped']):
+    tmp_file = "/tmp/smpls"
+    with open(tmp_file, 'w') as f:
+        f.write("\n".join([fname[:-len(suffix)] for fname in mapstat_files]))
+    
+    run_cmd("echo {args}", "%s > %s" % (" ".join(header_list), output_table), dockerize=dockerize)
+    run_cmd("paste {args}","%s >> %s" % (" ".join([tmp_file]+mapstat_files), output_table))
+
+
+@merge(mapstat_mirbase_bam, os.path.join(runs_scratch_dir, "qc", "mirbase_mapping_stats.tsv"))
+def aggregate_mirbase_mapping_stats(mapstats, out_table):
+    get_total_and_mapped_from_mapstats(mapstats, out_table, header_list=['sample','mirbase_total','mirbase_mapped'])
+
+@merge(mapstat_deduped_allbest_bam, os.path.join(runs_scratch_dir, "qc", "deduped_allbest_mapping_stats.tsv"))
+def aggregate_deduped_allbest_mapping_stats(mapstats, out_table):
+    get_total_and_mapped_from_mapstats(mapstats, out_table, file_suffix='.dedup.bam.mapstat',
+                                                      header_list=['sample','allbest_total','allbest_mapped'])
+
+@merge(mapstat_deduped_unique_bam, os.path.join(runs_scratch_dir, "qc", "deduped_uniq_mapping_stats.tsv"))
+def aggregate_deduped_unique_mapping_stats(mapstats, out_table):
+    get_total_and_mapped_from_mapstats(mapstats, out_table, file_suffix='.dedup.uniq.bam.mapstat',
+                                                      header_list=['sample','unique_total','unique_mapped'])
+
+
+
+
+# unmapped categories
+
 
 
 
