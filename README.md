@@ -51,10 +51,10 @@ Not used. Not tested.
 
 #### Native execution mode
 
-1. Install Python package `Ruffus` (http://www.ruffus.org.uk/) and all dependencies. 
+1. Install Python package [Ruffus](http://www.ruffus.org.uk/) and all dependencies. 
 Running jobs on a cluster (PBS, Slurm, etc) requires additional `drmaa` package, and is currently disabled.
 
-2. Download miRBase reference, reference genome and annotation
+2. Download [miRBase](ftp://mirbase.org/pub/mirbase/) reference, reference genome and annotation.
 
 3. Clone the pipeline repository and cd to it:
 ```
@@ -96,7 +96,9 @@ Running specific tasks can be done with `-t` / `--target` argument, e.g:
  - `qc_reads` runs FastQC on unprocessed and UMI-trimmed reads
 
 Dry-run (useful for testing and troubleshooting) is enabled with `-n`. 
+
 Verbosity switch allows to print pipeline flow (in dry-run) and follow progress at different detail-level, e.g (`-vv` - tasks, `-vvv` - jobs in tasks).
+
 In order to run several jobs in parallel use the `-j N`.
 
 
@@ -114,9 +116,9 @@ SCRATCH-ROOT/RUN_ID (if the pipeline is run with bcl2fastq step):
 
 After finishing, the sample directories will contain:
 
- trimmed FASTQ files
- BAM files
- sample's mapping stats
+ - trimmed FASTQ files
+ - BAM files
+ - sample's mapping stats
 
 
 The main results are in SCRATCH-ROOT directory which contains three miRNA count tables in tab-delimited format:
