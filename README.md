@@ -12,14 +12,16 @@ Conceptualy data processing is following:
 
  1) read trimming and extraction of UMI
  2) mapping to miRBase (must be downloaded and indexed separately)
- 
-  2.1) deduping based on UMI
-  2.2) separate counting of unique and multimapping reads
+
+    1) deduping based on UMI
+ 	
+    2) separate counting of unique and multimapping reads
     
  3) mapping of miRBase-unmapped to entire genome 
  
-  3.1) (TBD!) deduping 
-  3.2) counting features
+ 	 1. (TBD!) deduping 
+   
+ 	 2. counting features
     
  4) QC stats generation, both on read and alignment levels
 
@@ -62,14 +64,14 @@ cd <PIPELINE_HOME>
 
 5. Edit pipeline_settings.cfg specifing:
  
- - input data paths - either runfolder path or regex pointing to FASTQ files
- - reference-root - path to where indexed reference genome is expected
- - scratch-root - work dir
- - mirbase-fasta - fasta file with miRBase reference sequences, tested on mature human miRNAs
- - genome-fasta - reference for mapping non-miRNA reads
- - annotation-gtf - a file with genome feature annotations
- - adapters-fasta - fasta file with adapters for Trimmomatic (not required in default analysis path)
- - paths to executables
+   - input data paths - either runfolder path or regex pointing to FASTQ files
+   - reference-root - path to where indexed reference genome is expected
+   - scratch-root - work dir
+   - mirbase-fasta - fasta file with miRBase reference sequences, tested on mature human miRNAs
+   - genome-fasta - reference for mapping non-miRNA reads
+   - annotation-gtf - a file with genome feature annotations
+   - adapters-fasta - fasta file with adapters for Trimmomatic (not required in default analysis path)
+   - paths to executables
 
 
 
@@ -135,7 +137,7 @@ For running the complete analysis using 12 concurrent threads:
 pipeline.py -s my_settings.cfg \
         -t complete_run \
         -vvv -j 12
-``
+```
 
 
 
