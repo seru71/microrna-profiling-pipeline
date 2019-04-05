@@ -52,9 +52,10 @@ Not used. Not tested.
 #### Native execution mode
 
 1. Install Python package [Ruffus](http://www.ruffus.org.uk/) and all dependencies. 
-Running jobs on a cluster (PBS, Slurm, etc) requires additional `drmaa` package, and is currently disabled.
 
-2. Download [miRBase](ftp://mirbase.org/pub/mirbase/) reference, reference genome and annotation.
+   Running jobs on a cluster (PBS, Slurm, etc) requires additional `drmaa` package, and is currently disabled.
+
+2. Download [miRBase](http://mirbase.org) reference, reference genome and annotation.
 
 3. Clone the pipeline repository and cd to it:
 ```
@@ -62,7 +63,7 @@ git clone https://github.com/seru71/mirna-profiling-pipeline.git <PIPELINE_HOME>
 cd <PIPELINE_HOME>
 ```
 
-5. Edit pipeline_settings.cfg specifing:
+4. Edit pipeline_settings.cfg specifing:
  
    - input data paths - either runfolder path or regex pointing to FASTQ files
    - reference-root - path to where indexed reference genome is expected
