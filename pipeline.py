@@ -611,6 +611,9 @@ def qc_trimmed_reads(input_fastq, report):
     produce_fastqc_report(input_fastq, os.path.dirname(report))
 
 
+@follows(qc_raw_reads, qc_trimmed_reads)
+def qc_reads():
+    pass
 
 
     #8888888888888888888888888888888888888888888888888888
@@ -1161,7 +1164,7 @@ def qc_mapping():
 
 
 #@posttask(cleanup_files)
-@follows(count_mirs, qc_mapping)
+@follows(count_mirs, qc_reads, qc_mapping)
 def complete_run():
     pass
 

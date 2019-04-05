@@ -1,31 +1,51 @@
 
-# miRNA profiling pipeline 
+# Micro RNA profiling pipeline 
 
+Micro RNA profiling pipeline for NGS reads with UMI.
 
 
 ## Pipeline
 
-The pipeline consists of 
+Conceptualy:
 
-  bcl2fastq (optional),
-  Trimmomatic, 
-  umi trimming script (umi_trimmer.py)
-  BWA & SAMtools,
-  umitools,
-  FastQC,
+ 1) UMI-extraction
+ 2) mapping to miRBase (must be downloaded and indexed separately)
+    2.1) deduping based on UMI
+    2.2) separate counting of unique and multimapping reads
+ 3) mapping of miRBase-unmapped to entire genome 
+    3.1) (TBD!) deduping 
+    3.2) counting features
+ 4) QC stats generation, both on read and alignment levels
 
+
+The default path consists of following tools:
+
+ - (optional) bcl2fastq
+ - FastQC
+ - umi_tools for extracting UMI bacodes and deduplication
+ - bowtie2
+ - SAMTools in numerous places
+ - featureCount
+ - custom utilities for SAM processing
+
+Supplementary implemented tasks for:
+
+ - trimming with Trimmomatic and UMI extraction with a custom script (legacy)
+ - mapping with BWA and STAR
+
+
+All stitched together with [Ruffus](http://www.ruffus.org.uk). 
 
 
 ## Setup
 
-### Dockerized executables mode
-
-TBD
+## Dockerized mode
+Not used. Not tested.
 
 ### Native execution mode
 
 1. Install Python package `Ruffus` (http://www.ruffus.org.uk/). 
-Running jobs on a cluster (PBS, Slurm, etc) requires additional `drmaa` package. 
+Running jobs on a cluster (PBS, Slurm, etc) requires additional `drmaa` package, and is currently disabled.
 
 2. Clone the pipeline repository:
 `git clone https://github.com/seru71/mirna-profiling-pipeline.git <PIPELINE_HOME>`
@@ -37,10 +57,12 @@ cd <PIPELINE_HOME>
 4. Specify in pipeline_settings.cfg:
  
   input data paths - either runfolder path or regex pointing to FASTQ files
-  reference-root - path to where BWA indexed reference genome is expected
-  reference-fasta - fasta file with reference genome
+  reference-root - path to where indexed reference genome is expected
   scratch-root - work dir
-  adapters-fasta - fasta file with adapters for Trimmomatic
+  mirbase-fasta - fasta file with miRBase reference sequences, tested on mature human miRNAs
+  genome-fasta - reference for mapping non-miRNA reads
+  annotation-gtf - a file with genome feature annotations
+  adapters-fasta - fasta file with adapters for Trimmomatic (not required in default analysis path)
   paths to executables
 
 
@@ -52,39 +74,54 @@ The pipeline is run using `pipeline.py` script:
 * Running the script
 
     You can run the script using `python <PIPELINE_HOME>/pipeline.py`.
-    A list of possible options will be presented. The only required option is `--pipeline_settings FILE`, 
-    which specifies the location of the settings file.
+    A list of possible options will be presented. 
+    The only required argument is `-s SETTINGS_FILE`, which specifies the location of the settings file.
     
-    The settings file contains paths to input files, resources 
-    (e.g. reference FASTA, adapters file), docker settings, 
-    and docker containers to use. See an exemplary file for all required options 
-    in <PIPELINE_HOME>/pipeline_settings.cfg.
+    The settings file contains paths to input files, resources (e.g. reference FASTA, adapters file), docker settings, and docker containers to use. 
+    See an exemplary file for all required options in <PIPELINE_HOME>/pipeline_settings.cfg.
   
-    If you want to follow progress of the script, use the verbose option (`-vvvvv`).
-    In order to use multithreading, use the `-j` option (`-j 12`).
+    Running specific tasks can be done with `-t` / `--target` argument, e.g:
+
+    - `complete_run` task runs entire pipeline with full-QC
+    - `count_mirs` runs data processing and miR counting without QC
+    - `qc_mapping` generates mapping stat tables, no miR counting
+    - `qc_reads` runs FastQC on unprocessed and UMI-trimmed reads
+
+    Dry-run (useful for testing and troubleshooting) is enabled with `-n`. 
+    Verbosity switch allows to print pipeline flow (in dry-run) and follow progress at different detail-level, e.g (`-vv` - tasks, `-vvv` - jobs in tasks).
+    In order to run several jobs in parallel use the `-j N`.
 
 * Outputs
 
-    The pipeline script creates following directory structure in scratch-root directory (given in settings), or in 
-    scratch-root/RUN_ID (if the pipeline is run with bcl2fastq step):
+    The pipeline script creates following directory structure in SCRATCH-ROOT directory (given in settings), or in 
+    SCRATCH-ROOT/RUN_ID (if the pipeline is run with bcl2fastq step):
+
     	SAMPLE_ID/ - one dir per sample, named after samples found in the input data
     	fastqs/    - fastq files (if bcl2fastq conversion is run)
     	drmaa/     - slurm scripts created automatically (for debugging purposes)
-    	qc/        - qc output
+    	qc/        - QC output
 
     After finishing, the sample directories will contain:
+
     	- trimmed FASTQ files
-    	- a BAM file
+    	- BAM files
+	- sample's mapping stats
+    
+    The main results are in SCRATCH-ROOT directory which contains three miRNA count tables in tab-delimited format:
+
+        1) mirna_unique  - contains counts of reads mapping uniqly
+        2) mirna_allbest - additionally to (1) contains counts of reads mapping with equal alignment score in more than one location
+	3) mirna_single  - same as (2) but only first alignment for each read is kept/counted
+
+    Tables with mapping stats for all samples at different processing stages are in the qc/ directory.
 
 * Typical usage
 
-    For running the profiling using 12 concurrent threads:
+    For running the complete analysis using 12 concurrent threads:
 
-	pipeline.py --settings /my_dir/pipeline_settings/my_settings.cfg \
-				--target complete_run \
-				-vvv -j 12 \
-				--log_file /my_dir/pipeline_run_XXX.log
-
+	pipeline.py -s my_settings.cfg \
+		    -t complete_run \
+		    -vvv -j 12
 
 
 
