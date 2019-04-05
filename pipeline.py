@@ -1153,7 +1153,7 @@ def join_mapping_stats(input_stats, out_stats):
     # drop sample id from all except mirbase_stats
     # drop dedup_mapped because it is equal to dedup_total
     args = '{} {} {} {} {} {} | cut -f 1-3,5,8,11,14-15,17- > {}\
-           '.format(mirbase_stats, allbest_stats, unique_stats, unmapped_stats, bf_stats, out_stats)
+           '.format(mirbase_stats, allbest_stats, unique_stats, single_stats, unmapped_stats, bf_stats, out_stats)
     run_cmd('paste {args}', args, dockerize=dockerize)
 
 
