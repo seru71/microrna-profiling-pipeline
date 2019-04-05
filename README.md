@@ -1,14 +1,15 @@
 
 # Micro RNA profiling pipeline 
 
-Micro RNA profiling pipeline for NGS reads with UMI.
+Micro RNA profiling pipeline for NGS reads with UMI. 
+Developed at [BTM](http://biostat.umed.pl), [Medical University of Lodz](http://umed.pl).
 
 
-## Pipeline
+### Pipeline
 
-Conceptualy:
+Conceptualy data processing is following:
 
- 1) UMI-extraction
+ 1) read trimming and extraction of UMI
  2) mapping to miRBase (must be downloaded and indexed separately)
     2.1) deduping based on UMI
     2.2) separate counting of unique and multimapping reads
@@ -17,6 +18,8 @@ Conceptualy:
     3.2) counting features
  4) QC stats generation, both on read and alignment levels
 
+
+## Dependencies
 
 The default path consists of following tools:
 
@@ -39,22 +42,22 @@ All stitched together with [Ruffus](http://www.ruffus.org.uk).
 
 ## Setup
 
-## Dockerized mode
+### Dockerized mode
 Not used. Not tested.
 
 ### Native execution mode
 
-1. Install Python package `Ruffus` (http://www.ruffus.org.uk/). 
+1. Install Python package `Ruffus` (http://www.ruffus.org.uk/) and all dependencies. 
 Running jobs on a cluster (PBS, Slurm, etc) requires additional `drmaa` package, and is currently disabled.
 
-2. Clone the pipeline repository:
-`git clone https://github.com/seru71/mirna-profiling-pipeline.git <PIPELINE_HOME>`
+2. Download miRBase reference, reference genome and annotation
 
-3. Change directory to newly created pipeline dir
-```
+3. Clone the pipeline repository and cd to it:
+```git clone https://github.com/seru71/mirna-profiling-pipeline.git <PIPELINE_HOME>
 cd <PIPELINE_HOME>
 ```
-4. Specify in pipeline_settings.cfg:
+
+5. Edit pipeline_settings.cfg specifing:
  
   input data paths - either runfolder path or regex pointing to FASTQ files
   reference-root - path to where indexed reference genome is expected
@@ -71,7 +74,7 @@ cd <PIPELINE_HOME>
 
 The pipeline is run using `pipeline.py` script:
 
-* Running the script
+### Running the script
 
     You can run the script using `python <PIPELINE_HOME>/pipeline.py`.
     A list of possible options will be presented. 
@@ -91,7 +94,7 @@ The pipeline is run using `pipeline.py` script:
     Verbosity switch allows to print pipeline flow (in dry-run) and follow progress at different detail-level, e.g (`-vv` - tasks, `-vvv` - jobs in tasks).
     In order to run several jobs in parallel use the `-j N`.
 
-* Outputs
+### Outputs
 
     The pipeline script creates following directory structure in SCRATCH-ROOT directory (given in settings), or in 
     SCRATCH-ROOT/RUN_ID (if the pipeline is run with bcl2fastq step):
@@ -115,7 +118,7 @@ The pipeline is run using `pipeline.py` script:
 
     Tables with mapping stats for all samples at different processing stages are in the qc/ directory.
 
-* Typical usage
+#### Typical usage
 
     For running the complete analysis using 12 concurrent threads:
 
