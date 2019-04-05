@@ -427,7 +427,7 @@ def run_piped_command(*args):
                   ".format(cpus=cpus, mem=int(1.2*mem_per_cpu), time=walltime)
 	
     full_cmd = expand_piped_command(*args)
-    print full_cmd	
+#    print full_cmd	
     try:
         stdout, stderr = run_job(full_cmd.strip(), 
                                  job_other_options=job_options,
@@ -499,6 +499,7 @@ def bcl2fastq_conversion(run_directory, completed_flag):
 # SAMPLE_ID can contain all signs except path delimiter, i.e. "\"
 #
 @active_if(run_folder != None or input_fastqs != None)
+@follows(mkdir(runs_scratch_dir))
 @jobs_limit(1)    # to avoid problems with simultanous creation of the same sample dir
 @subdivide(os.path.join(runs_scratch_dir,'fastqs','*.fastq.gz') if run_folder != None else input_fastqs,
            formatter('(?P<PATH>.+)/(?P<SAMPLE_ID>[^/]+)_S[1-9]\d?_L\d\d\d_R1_001\.fastq\.gz$'), 
@@ -528,7 +529,7 @@ PRE_UMI_ADAPTER='AACTGTAGGCACCATCAAT'
 # SAMPLE_ID can contain all signs except path delimiter, i.e. "\"
 
 @active_if(run_folder != None or input_fastqs != None)
-@transform(link_fastqs, regex(r'(.+)/([^/]+)_S[1-9]\d?_(L\d\d\d)_R1_001\.fastq\.gz$'),  r'\1/\2_\3.fq.tmp.gz')
+@transform(link_fastqs, regex(r'(.+)/([^/]+)_S[1-9]\d?_(L\d\d\d)_R1_001\.fastq\.gz$'),  r'\1/\2_\3.fq.gz')
 def extract_umi(input_fq, output_fq):
     """ Trim reads to the beginning of UMI adaper and extract UMI sequence to read identifier """ 
     
@@ -554,7 +555,7 @@ def extract_umi(input_fq, output_fq):
 # SAMPLE_ID can contain all signs except path delimiter, i.e. "\"
 #
 @active_if(run_folder != None or input_fastqs != None)
-@transform(link_fastqs, regex(r'(.+)/([^/]+)_S[1-9]\d?_(L\d\d\d)_R1_001\.fastq\.gz$'),  r'\1/\2_\3.fq.tmp.gz')
+@transform(link_fastqs, regex(r'(.+)/([^/]+)_S[1-9]\d?_(L\d\d\d)_R1_001\.fastq\.gz$'),  r'\1/\2_\3.fq.gz')
 def trim_reads_and_extract_umi(input_fq, output_fq):
 
     intermediate_fq = output_fq+".intermediate.gz"
@@ -585,12 +586,6 @@ def trim_reads_and_extract_umi(input_fq, output_fq):
 
 
 
-@transform(os.path.join(runs_scratch_dir,"*","*.tmp.gz"), suffix(".tmp.gz"), ".gz")
-def trim_reads(input_fq, output_fq):
-    os.symlink(input_fq, output_fq)
-
-
-
 
 
     #88888888888888888888888888888888888888888888888888
@@ -609,7 +604,7 @@ def qc_raw_reads(input_fastq, report):
 
 
 @follows(mkdir(os.path.join(runs_scratch_dir,'qc')), mkdir(os.path.join(runs_scratch_dir,'qc','read_qc')))
-@transform(trim_reads, formatter('.+/(?P<SAMPLE_ID>[^/]+)\.fq\.gz$'), 
+@transform(extract_umi, formatter('.+/(?P<SAMPLE_ID>[^/]+)\.fq\.gz$'), 
 	  os.path.join(runs_scratch_dir,'qc','read_qc')+'/{SAMPLE_ID[0]}_fastqc.html')
 def qc_trimmed_reads(input_fastq, report):
     """ Generate FastQC report for trimmed FASTQs """
@@ -745,9 +740,9 @@ def map_reads(fastq_list, ref_genome, output_bam, read_groups=None, mapper='bowt
         os.remove(f)
 
 
-@collate(trim_reads, 
+@collate(extract_umi, 
             formatter("(.+)/(?P<SAMPLE_ID>[^/]+)_L\d\d\d\.fq\.gz$"), 
-            "{subpath[0][0]}/{subdir[0][0]}.bowtie.bam",
+            "{subpath[0][0]}/{subdir[0][0]}.bam",
             "{SAMPLE_ID[0]}")
 def map_to_mirbase(fastqs, bam_file, sample_id):
     """ Maps trimmed reads from all lanes """
@@ -1022,24 +1017,28 @@ def get_total_and_mapped_from_flagstats(flagstat_files, file_suffix='.bam.flagst
     return out
     
 '''
+@follows(mkdir(os.path.join(runs_scratch_dir,'qc')))
 @merge(flagstat_mirbase_bam, os.path.join(runs_scratch_dir, "qc", "mirbase_mapping_stats.tsv"))
 def aggregate_mirbase_mapping_stats(flagstats, out_table):
     with open(out_table,"wt") as out:
         out.write(get_total_and_mapped_from_flagstats(flagstats, 
                                                       header_list=['sample','mirbase_total','mirbase_mapped']))
 
+@follows(mkdir(os.path.join(runs_scratch_dir,'qc')))
 @merge(flagstat_deduped_allbest_bam, os.path.join(runs_scratch_dir, "qc", "deduped_allbest_mapping_stats.tsv"))
 def aggregate_deduped_allbest_mapping_stats(flagstats, out_table):
      with open(out_table,"wt") as out:
         out.write(get_total_and_mapped_from_flagstats(flagstats, file_suffix='.dedup.bam.flagstat',
                                                       header_list=['sample','allbest_total','allbest_mapped']))
 
+@follows(mkdir(os.path.join(runs_scratch_dir,'qc')))
 @merge(flagstat_deduped_unique_bam, os.path.join(runs_scratch_dir, "qc", "deduped_uniq_mapping_stats.tsv"))
 def aggregate_deduped_unique_mapping_stats(flagstats, out_table):
      with open(out_table,"wt") as out:
         out.write(get_total_and_mapped_from_flagstats(flagstats, file_suffix='.dedup.uniq.bam.flagstat',
                                                       header_list=['sample','unique_total','unique_mapped']))
 '''
+@follows(mkdir(os.path.join(runs_scratch_dir,'qc')))
 @merge(flagstat_unmapped_bam, os.path.join(runs_scratch_dir, "qc", "unmapped_mapping_stats.tsv"))
 def aggregate_unmapped_mapping_stats(flagstats, out_table):
      with open(out_table,"wt") as out:
@@ -1049,10 +1048,12 @@ def aggregate_unmapped_mapping_stats(flagstats, out_table):
     
 #
 # mapstats
+# Flagstat counts not reads but alignments, so if a read has two alignments it is counted twice. Mapstat counts unique reads in a BAM
 #
 
     
 def run_mapstat(bam):
+    """ Mapstat counts unique reads in a BAM, all and mapped """
     run_cmd(samtools, "view {} | cut -f1 | sort | uniq | wc -l > {} ".format(bam, bam+'.mapstat'), dockerize=dockerize)
     run_cmd(samtools, "view -F4 {} | cut -f1 | sort | uniq | wc -l >> {} ".format(bam, bam+'.mapstat'), dockerize=dockerize)
 
@@ -1089,20 +1090,24 @@ def get_total_and_mapped_from_mapstats(mapstat_files, output_table, file_suffix=
     run_cmd("paste {args}","%s >> %s" % (" ".join([tmp_file]+mapstat_files), output_table), dockerize=dockerize)
 
 
+@follows(mkdir(os.path.join(runs_scratch_dir,'qc')))
 @merge(mapstat_mirbase_bam, os.path.join(runs_scratch_dir, "qc", "mirbase_mapping_stats.tsv"))
 def aggregate_mirbase_mapping_stats(mapstats, out_table):
     get_total_and_mapped_from_mapstats(mapstats, out_table, header_list=['sample','mirbase_total','mirbase_mapped'])
 
+@follows(mkdir(os.path.join(runs_scratch_dir,'qc')))
 @merge(mapstat_deduped_allbest_bam, os.path.join(runs_scratch_dir, "qc", "deduped_allbest_mapping_stats.tsv"))
 def aggregate_deduped_allbest_mapping_stats(mapstats, out_table):
     get_total_and_mapped_from_mapstats(mapstats, out_table, file_suffix='.dedup.bam.mapstat',
                                                       header_list=['sample','allbest_total','allbest_mapped'])
 
+@follows(mkdir(os.path.join(runs_scratch_dir,'qc')))
 @merge(mapstat_deduped_unique_bam, os.path.join(runs_scratch_dir, "qc", "deduped_uniq_mapping_stats.tsv"))
 def aggregate_deduped_unique_mapping_stats(mapstats, out_table):
     get_total_and_mapped_from_mapstats(mapstats, out_table, file_suffix='.dedup.uniq.bam.mapstat',
                                                       header_list=['sample','unique_total','unique_mapped'])
 
+@follows(mkdir(os.path.join(runs_scratch_dir,'qc')))
 @merge(mapstat_deduped_single_bam, os.path.join(runs_scratch_dir, "qc", "deduped_single_mapping_stats.tsv"))
 def aggregate_deduped_single_mapping_stats(mapstats, out_table):
     get_total_and_mapped_from_mapstats(mapstats, out_table, file_suffix='.dedup.single.bam.mapstat',
@@ -1114,7 +1119,7 @@ def aggregate_deduped_single_mapping_stats(mapstats, out_table):
 
 
 
-
+@follows(mkdir(os.path.join(runs_scratch_dir,'qc')))
 @merge(count_unmapped_reads_by_category, os.path.join(runs_scratch_dir, "qc", "unmapped_biofeature_stats.tsv"))
 def aggregate_unmapped_biofeatures(input_files, out_table):
     header = "sample"
