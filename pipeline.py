@@ -765,7 +765,7 @@ def extract_unmapped(bam, fastq):
 
 @transform(extract_unmapped, suffix('.fq.gz'), '.bam')
 def map_unmapped(fastq, bam):
-    map_reads([fastq], genome_reference, bam)
+    map_reads([fastq], genome_reference, bam, mapper='bwa')
 
 
 
