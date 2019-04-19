@@ -455,7 +455,18 @@ def produce_fastqc_report(fastq_file, output_dir=None):
     args += (' -o '+output_dir) if output_dir != None else ''
     run_cmd(fastqc, args, dockerize=dockerize)
 
-    
+
+def count_fastq_reads(fastqs, output):
+    run_piped_command("zcat {args}", " ".join(fastqs), None,
+                      "grep {args}", "-c ^@ > %s" % output, None)
+
+def transpose_tsv_table(inputf, outputf, columns):
+    if os.path.exists(outputf):
+        os.remove(outputf)
+    for c in columns:
+        run_piped_command("cut {args}", "-f %s %s" % (str(c), inputf), None,
+                          "xargs {args}", "echo", None,
+                          "sed {args}", "'s/ /\t/g' >> %s" % outputf, None)
 
 
 #88888888888888888888888888888888888888888888888888888888888888888888888888888888888888888
@@ -611,7 +622,37 @@ def qc_trimmed_reads(input_fastq, report):
     produce_fastqc_report(input_fastq, os.path.dirname(report))
 
 
-@follows(qc_raw_reads, qc_trimmed_reads)
+@follows(mkdir(os.path.join(runs_scratch_dir,'qc')), mkdir(os.path.join(runs_scratch_dir,'qc','read_qc')))
+@collate(link_fastqs, 
+            formatter("(.+)/(?P<SAMPLE_ID>[^/]+)_S[1-9]\d?_L\d\d\d\_R1_001.fastq\.gz$"), 
+            "{subpath[0][1]}/qc/read_qc/{subdir[0][0]}.raw_readcount")
+def count_raw_reads_per_sample(fastqs, count_file):
+    count_fastq_reads(fastqs, count_file)
+
+
+@follows(mkdir(os.path.join(runs_scratch_dir,'qc')), mkdir(os.path.join(runs_scratch_dir,'qc','read_qc')))
+@collate(extract_umi, 
+        formatter("(.+)/(?P<SAMPLE_ID>[^/]+)_L\d\d\d\.fq\.gz$"), 
+        "{subpath[0][1]}/qc/read_qc/{subdir[0][0]}.trimmed_readcount")
+def count_trimmed_reads_per_sample(fastqs, count_file):
+    count_fastq_reads(fastqs, count_file)
+
+@merge([count_raw_reads_per_sample, count_trimmed_reads_per_sample], 
+        os.path.join(runs_scratch_dir,'qc', 'read_qc', 'all_samples.readcounts'))
+def join_fastq_readcounts(count_files, output):
+    raw = count_files[0:len(count_files)/2]
+    trimmed = count_files[len(count_files)/2:]
+    with open(output+".tmp", 'w') as out:
+        out.write("sample\traw\ttrimmed\n")
+        for i in range(0,len(raw)):
+            sample = os.path.basename(raw[i])[:-len(".raw_readcount")]
+            with open(raw[i]) as r, open(trimmed[i]) as t:
+                out.write('\t'.join([sample, r.readline().strip(), t.readline()]))
+
+    transpose_tsv_table(output+".tmp", output, [1,2,3])
+    os.remove(output+".tmp")
+
+@follows(qc_raw_reads, qc_trimmed_reads, join_fastq_readcounts)
 def qc_reads():
     pass
 
@@ -1040,14 +1081,14 @@ def aggregate_deduped_unique_mapping_stats(flagstats, out_table):
      with open(out_table,"wt") as out:
         out.write(get_total_and_mapped_from_flagstats(flagstats, file_suffix='.dedup.uniq.bam.flagstat',
                                                       header_list=['sample','unique_total','unique_mapped']))
-'''
+
 @follows(mkdir(os.path.join(runs_scratch_dir,'qc')))
 @merge(flagstat_unmapped_bam, os.path.join(runs_scratch_dir, "qc", "unmapped_mapping_stats.tsv"))
 def aggregate_unmapped_mapping_stats(flagstats, out_table):
      with open(out_table,"wt") as out:
         out.write(get_total_and_mapped_from_flagstats(flagstats, file_suffix='.unmapped.bam.flagstat',
                                                       header_list=['sample','unmapped_total','unmapped_mapped']))
-
+'''
     
 #
 # mapstats
@@ -1116,6 +1157,11 @@ def aggregate_deduped_single_mapping_stats(mapstats, out_table):
     get_total_and_mapped_from_mapstats(mapstats, out_table, file_suffix='.dedup.single.bam.mapstat',
                                                       header_list=['sample','single_total','single_mapped'])
 
+@follows(mkdir(os.path.join(runs_scratch_dir,'qc')))
+@merge(mapstat_unmapped_bam, os.path.join(runs_scratch_dir, "qc", "unmapped_mapping_stats.tsv"))
+def aggregate_unmapped_mapping_stats(mapstats, out_table):
+    get_total_and_mapped_from_mapstats(mapstats, out_table, file_suffix='.unmapped.bam.mapstat',
+                                                      header_list=['sample','unmapped_total','unmapped_mapped'])
 
 
 # unmapped categories
@@ -1142,19 +1188,28 @@ def aggregate_unmapped_biofeatures(input_files, out_table):
         f.write(header + '\n' + content)
 
 
-@transform(aggregate_mirbase_mapping_stats, formatter(), 
-          add_inputs(aggregate_deduped_allbest_mapping_stats, aggregate_deduped_unique_mapping_stats, aggregate_deduped_single_mapping_stats, aggregate_unmapped_mapping_stats, aggregate_unmapped_biofeatures), 
+@transform(join_fastq_readcounts, formatter(), 
+          add_inputs(aggregate_mirbase_mapping_stats, aggregate_deduped_allbest_mapping_stats, \
+                     aggregate_deduped_unique_mapping_stats, aggregate_deduped_single_mapping_stats, \
+                     aggregate_unmapped_mapping_stats, aggregate_unmapped_biofeatures), 
           os.path.join(runs_scratch_dir, "qc", "mapping_stats.tsv"))
 def join_mapping_stats(input_stats, out_stats):
     
-    mirbase_stats, allbest_stats, unique_stats, single_stats, unmapped_stats, bf_stats = \
-        input_stats[0], input_stats[1], input_stats[2], input_stats[3], input_stats[4], input_stats[5]
+    
+    fq_stats, mirbase_stats, allbest_stats, unique_stats, single_stats, unmapped_stats, bf_stats = \
+        input_stats[0], input_stats[1], input_stats[2], input_stats[3], input_stats[4], input_stats[5], input_stats[6]
+    
+    # cat mapstats first
+    run_piped_command("cat {args}", "{} {} {} {} {} ".format(mirbase_stats, allbest_stats, unique_stats, single_stats, unmapped_stats), None,
+                       "grep {args}", "-v sample", None,
+                       "cat {args}", "{} - > {}".format(fq_stats, out_stats), None)
+    
     
     # drop sample id from all except mirbase_stats
     # drop dedup_mapped because it is equal to dedup_total
-    args = '{} {} {} {} {} {} | cut -f 1-3,5,8,11,14-15,17- > {}\
-           '.format(mirbase_stats, allbest_stats, unique_stats, single_stats, unmapped_stats, bf_stats, out_stats)
-    run_cmd('paste {args}', args, dockerize=dockerize)
+    #args = '{} {} {} {} {} {} | cut -f 1-3,5,8,11,14-15,17- > {}\
+    #       '.format(mirbase_stats, allbest_stats, unique_stats, single_stats, unmapped_stats, bf_stats, out_stats)
+    #run_cmd('paste {args}', args, dockerize=dockerize)
 
 
 @follows(join_mapping_stats)
